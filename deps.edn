@@ -1,0 +1,6 @@
+{:paths []
+ :deps {}
+ ;; Monorepo workspace. Each module has its own deps.edn.
+ ;; Run commands from within the module directory, e.g.:
+ ;;   cd modules/drip && clojure -M:test -m cognitect.test-runner
+ }

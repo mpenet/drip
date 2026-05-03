@@ -1,0 +1,2 @@
+{:lint-as {s-exp.drip.db/with-tx clojure.core/with-open
+           s-exp.drip/with-tx clojure.core/with-open}}
