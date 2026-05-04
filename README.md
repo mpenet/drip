@@ -313,12 +313,47 @@ Persist a handler's result into the job's `metadata` column under the `"output"`
 
 On PostgreSQL, a `LISTEN` connection starts automatically. Inserts in other processes trigger an immediate poll.
 
-### Custom retry policy
+### Retry policies
+
+Drip ships several built-in policy constructors. All take attempt (1-based long) and return a `java.time.Instant`.
 
 ```clojure
-;; Takes attempt (1-based long), returns java.time.Instant.
-(defn my-retry-policy [attempt]
+;; Default: attempt^4 seconds ± 10% jitter (25 attempts ≈ 4 days total)
+drip/default-retry-policy
+
+;; Always wait a fixed delay (duration string or raw ms number)
+(drip/constant-retry-policy "30s")              ; 30s
+(drip/constant-retry-policy "30s" 0.1)          ; 30s ± 10% jitter
+(drip/constant-retry-policy 30000)              ; same, as raw ms
+
+;; Delay grows linearly with attempt: base * attempt
+(drip/linear-retry-policy "10s")                ; 10s, 20s, 30s, …
+(drip/linear-retry-policy "10s" "5m")           ; capped at 5m
+(drip/linear-retry-policy "10s" "5m" 0.1)       ; + 10% jitter
+
+;; Configurable exponential backoff: base * multiplier^(attempt-1)
+(drip/exponential-retry-policy "1s")            ; 1s, 2s, 4s, … capped at 1h
+(drip/exponential-retry-policy "1s" 3.0)        ; 1s, 3s, 9s, …
+(drip/exponential-retry-policy "1s" 2.0 "30m")  ; capped at 30m
+(drip/exponential-retry-policy "1s" 2.0 "30m" 0.15) ; + 15% jitter
+
+;; Retry immediately — useful for tests or idempotent fast-fail jobs
+(drip/immediate-retry-policy)
+
+;; Custom: takes attempt (1-based long), returns java.time.Instant
+(defn my-policy [attempt]
   (.plusSeconds (Instant/now) (* 30 attempt)))
+```
+
+Use per-kind overrides via `:retry-policies` in `start-executor!`:
+
+```clojure
+(drip/start-executor!
+  {:client  client
+   :registry {"slow_job" slow-handler
+              "fast_job" fast-handler}
+   :retry-policy  (drip/exponential-retry-policy "5s" 2.0 "1h")
+   :retry-policies {"fast_job" (drip/constant-retry-policy "2s")}})
 ```
 
 ### Queue management

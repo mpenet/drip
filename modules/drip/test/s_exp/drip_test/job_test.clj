@@ -87,4 +87,81 @@
   (testing "default-retry-policy returns Instant in the future"
     (let [before (Instant/now)
           next-at (job/default-retry-policy 1)]
-      (is (.isAfter ^Instant next-at before)))))
+      (is (.isAfter ^Instant next-at before))))
+
+  (testing "default-retry-policy increases delay with attempt"
+    (let [delay1 (.toEpochMilli ^Instant (job/default-retry-policy 1))
+          delay5 (.toEpochMilli ^Instant (job/default-retry-policy 5))]
+      (is (< delay1 delay5))))
+
+  (testing "constant-retry-policy always returns roughly the same delay"
+    (let [policy (job/constant-retry-policy "5s")
+          before (.toEpochMilli (Instant/now))
+          t1 (.toEpochMilli ^Instant (policy 1))
+          t2 (.toEpochMilli ^Instant (policy 10))
+          t3 (.toEpochMilli ^Instant (policy 100))]
+      (is (< (Math/abs (- t1 t2)) 200))
+      (is (< (Math/abs (- t1 t3)) 200))
+      (is (> t1 before))))
+
+  (testing "constant-retry-policy with jitter stays within expected range"
+    (let [delay-ms 10000
+          jitter 0.2
+          policy (job/constant-retry-policy "10s" jitter)
+          now (.toEpochMilli (Instant/now))
+          samples (repeatedly 20 #(.toEpochMilli ^Instant (policy 1)))
+          lo (+ now (long (* delay-ms (- 1 jitter))))
+          hi (+ now (long (* delay-ms (+ 1 jitter))))]
+      (is (every? #(and (>= % lo) (<= % hi)) samples))))
+
+  (testing "constant-retry-policy accepts raw ms number"
+    (let [policy (job/constant-retry-policy 5000)
+          before (.toEpochMilli (Instant/now))
+          t1 (.toEpochMilli ^Instant (policy 1))]
+      (is (> t1 before))))
+
+  (testing "linear-retry-policy delay grows linearly with attempt"
+    (let [policy (job/linear-retry-policy "1s")
+          now (.toEpochMilli (Instant/now))
+          t1 (- (.toEpochMilli ^Instant (policy 1)) now)
+          t3 (- (.toEpochMilli ^Instant (policy 3)) now)]
+      (is (< t1 t3))
+      (is (< (Math/abs (- t1 1000)) 50))
+      (is (< (Math/abs (- t3 3000)) 50))))
+
+  (testing "linear-retry-policy respects max cap"
+    (let [policy (job/linear-retry-policy "1s" "2500ms")
+          now (.toEpochMilli (Instant/now))
+          t10 (- (.toEpochMilli ^Instant (policy 10)) now)]
+      (is (<= t10 2500))))
+
+  (testing "exponential-retry-policy delay grows exponentially"
+    (let [policy (job/exponential-retry-policy "1s" 2.0 Long/MAX_VALUE 0.0)
+          now (.toEpochMilli (Instant/now))
+          t1 (- (.toEpochMilli ^Instant (policy 1)) now)
+          t2 (- (.toEpochMilli ^Instant (policy 2)) now)
+          t3 (- (.toEpochMilli ^Instant (policy 3)) now)]
+      (is (< t1 t2))
+      (is (< t2 t3))
+      (is (< (Math/abs (- t1 1000)) 50))
+      (is (< (Math/abs (- t2 2000)) 50))
+      (is (< (Math/abs (- t3 4000)) 50))))
+
+  (testing "exponential-retry-policy respects max cap"
+    (let [policy (job/exponential-retry-policy "1s" 2.0 "5s" 0.0)
+          now (.toEpochMilli (Instant/now))
+          t10 (- (.toEpochMilli ^Instant (policy 10)) now)]
+      (is (<= t10 5000))))
+
+  (testing "immediate-retry-policy returns Instant at or before now"
+    (let [policy (job/immediate-retry-policy)
+          before (Instant/now)
+          next-at (policy 1)
+          after (Instant/now)]
+      (is (not (.isAfter ^Instant next-at after)))))
+
+  (testing "immediate-retry-policy ignores attempt number"
+    (let [policy (job/immediate-retry-policy)
+          t1 (.toEpochMilli ^Instant (policy 1))
+          t25 (.toEpochMilli ^Instant (policy 25))]
+      (is (< (Math/abs (- t1 t25)) 100)))))

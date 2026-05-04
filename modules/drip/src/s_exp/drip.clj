@@ -428,8 +428,38 @@
 ;; ---------------------------------------------------------------------------
 
 (def default-retry-policy
-  "Default retry policy fn. Takes attempt (1-based long), returns java.time.Instant."
+  "Default retry policy fn. Takes attempt (1-based long), returns java.time.Instant.
+   Uses exponential backoff: attempt^4 seconds ± 10% jitter."
   job/default-retry-policy)
+
+(def constant-retry-policy
+  "Returns a retry policy fn that always waits a fixed delay between retries.
+   (constant-retry-policy delay-ms)
+   (constant-retry-policy delay-ms jitter-factor)
+   jitter-factor adds ±fraction of delay-ms as random jitter (default 0)."
+  job/constant-retry-policy)
+
+(def linear-retry-policy
+  "Returns a retry policy fn that waits base-ms * attempt milliseconds.
+   (linear-retry-policy base-ms)
+   (linear-retry-policy base-ms max-ms)
+   (linear-retry-policy base-ms max-ms jitter-factor)"
+  job/linear-retry-policy)
+
+(def exponential-retry-policy
+  "Returns a retry policy fn with configurable exponential backoff.
+   (exponential-retry-policy base-ms)
+   (exponential-retry-policy base-ms multiplier)
+   (exponential-retry-policy base-ms multiplier max-ms)
+   (exponential-retry-policy base-ms multiplier max-ms jitter-factor)
+   Defaults: multiplier=2.0, max-ms=3600000 (1h), jitter-factor=0.1."
+  job/exponential-retry-policy)
+
+(def immediate-retry-policy
+  "Returns a retry policy fn that retries immediately with no delay.
+   Useful for tests or jobs that should be reattempted without waiting.
+   (immediate-retry-policy)"
+  job/immediate-retry-policy)
 
 (def default-retention-ms worker/default-retention-ms)
 

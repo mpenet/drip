@@ -1,4 +1,5 @@
 (ns s-exp.drip.job
+  (:require [s-exp.duration :as duration])
   (:import (java.time Instant)))
 
 ;; ---------------------------------------------------------------------------
@@ -58,14 +59,69 @@
 ;; Retry policy
 ;; ---------------------------------------------------------------------------
 
+(defn- add-jitter
+  "Adds ±jitter-factor fractional jitter to ms. Returns long."
+  ^long [^long ms ^double jitter-factor]
+  (let [jitter (* ms jitter-factor (- (rand) 0.5))]
+    (max 0 (long (+ ms jitter)))))
+
 (defn- retry-delay-seconds
   "Exponential backoff: attempt^4 seconds ± 10% jitter."
   ^long [^long attempt]
-  (let [base (Math/pow attempt 4)
-        jitter (* base 0.1 (- (rand) 0.5))]
-    (long (+ base jitter))))
+  (add-jitter (long (* (Math/pow attempt 4) 1000)) 0.1))
 
 (defn default-retry-policy
-  "Returns a java.time.Instant for the next retry. attempt is 1-based."
+  "Returns a java.time.Instant for the next retry. attempt is 1-based.
+   Uses exponential backoff: attempt^4 seconds ± 10% jitter."
   [^long attempt]
-  (.plusSeconds (Instant/now) (retry-delay-seconds attempt)))
+  (.plusMillis (Instant/now) (retry-delay-seconds attempt)))
+
+(defn constant-retry-policy
+  "Returns a retry policy fn that always waits `delay` between retries.
+   `delay` is a duration value: string (e.g. \"30s\", \"2m\") or number of milliseconds.
+   Optionally add ±jitter-factor fractional jitter (default 0, i.e. no jitter)."
+  ([delay]
+   (constant-retry-policy delay 0.0))
+  ([delay ^double jitter-factor]
+   (let [ms (long (duration/duration delay))]
+     (fn [_attempt]
+       (.plusMillis (Instant/now) (add-jitter ms jitter-factor))))))
+
+(defn linear-retry-policy
+  "Returns a retry policy fn that waits `base` * attempt duration.
+   `base` and `max` are duration values: string (e.g. \"10s\") or number of milliseconds.
+   Optionally capped at `max` and with ±jitter-factor fractional jitter."
+  ([base]
+   (linear-retry-policy base Long/MAX_VALUE 0.0))
+  ([base max]
+   (linear-retry-policy base max 0.0))
+  ([base max ^double jitter-factor]
+   (let [base-ms (long (duration/duration base))
+         max-ms (long (duration/duration max))]
+     (fn [^long attempt]
+       (.plusMillis (Instant/now) (add-jitter (min (* base-ms attempt) max-ms) jitter-factor))))))
+
+(defn exponential-retry-policy
+  "Returns a retry policy fn with configurable exponential backoff.
+   Waits `base` * multiplier^(attempt-1), capped at `max`.
+   `base` and `max` are duration values: string (e.g. \"1s\", \"1h\") or number of milliseconds.
+   Optionally adds ±jitter-factor fractional jitter (default 0.1)."
+  ([base]
+   (exponential-retry-policy base 2.0 "1h" 0.1))
+  ([base ^double multiplier]
+   (exponential-retry-policy base multiplier "1h" 0.1))
+  ([base ^double multiplier max]
+   (exponential-retry-policy base multiplier max 0.1))
+  ([base ^double multiplier max ^double jitter-factor]
+   (let [base-ms (long (duration/duration base))
+         max-ms (long (duration/duration max))]
+     (fn [^long attempt]
+       (let [raw (long (* base-ms (Math/pow multiplier (dec attempt))))
+             ms (add-jitter (min raw max-ms) jitter-factor)]
+         (.plusMillis (Instant/now) ms))))))
+
+(defn immediate-retry-policy
+  "Returns a retry policy fn that retries immediately with no delay.
+   Useful for testing or jobs that should be reattempted without waiting."
+  []
+  (fn [_attempt] (Instant/now)))
