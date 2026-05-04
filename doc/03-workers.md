@@ -138,21 +138,37 @@ Exponential backoff: `attempt^4` seconds ± 10% jitter.
 | 10 | 27.8h |
 | 20 | ~160 days |
 
-### Custom policies
+### Built-in policy constructors
+
+Drip ships several policy constructors. All duration arguments accept strings (`"30s"`, `"5m"`, `"1h"`) or raw milliseconds.
 
 ```clojure
-;; Linear: 30s per attempt
-(defn linear-retry [attempt]
-  (.plusSeconds (Instant/now) (* 30 attempt)))
-
 ;; Fixed delay
-(defn fixed-retry [_attempt]
-  (.plusSeconds (Instant/now) 60))
+(drip/constant-retry-policy "30s")                        ; always 30s
+(drip/constant-retry-policy "30s" :jitter 0.1)            ; 30s ± 10%
 
-;; Capped exponential
-(defn capped-retry [attempt]
-  (let [delay (min 3600 (long (Math/pow attempt 4)))]
-    (.plusSeconds (Instant/now) delay)))
+;; Linear: base * attempt
+(drip/linear-retry-policy "10s")                          ; 10s, 20s, 30s, …
+(drip/linear-retry-policy "10s" :max "5m")                ; capped at 5m
+(drip/linear-retry-policy "10s" :max "5m" :jitter 0.1)   ; + 10% jitter
+
+;; Exponential: base * multiplier^(attempt-1)
+(drip/exponential-retry-policy "1s")                                           ; 1s, 2s, 4s, … capped at 1h
+(drip/exponential-retry-policy "1s" :multiplier 3.0)                           ; 1s, 3s, 9s, …
+(drip/exponential-retry-policy "1s" :multiplier 2.0 :max "30m")                ; capped at 30m
+(drip/exponential-retry-policy "1s" :multiplier 2.0 :max "30m" :jitter 0.15)  ; + 15% jitter
+
+;; Immediate: no delay (useful for tests or idempotent fast-fail jobs)
+(drip/immediate-retry-policy)
+```
+
+### Custom policies
+
+Any function `(fn [attempt] java.time.Instant)` works as a policy:
+
+```clojure
+(defn my-policy [attempt]
+  (.plusSeconds (Instant/now) (* 30 attempt)))
 ```
 
 ### Per-kind policies
@@ -163,9 +179,9 @@ Use `:retry-policies` to override for specific job kinds:
 (drip/start-executor!
   {:client         client
    :registry       registry
-   :retry-policy   drip/default-retry-policy  ; default for all kinds
-   :retry-policies {"fast_fail" fixed-retry   ; override for specific kinds
-                    "slow_job"  capped-retry}})
+   :retry-policy   (drip/exponential-retry-policy "5s" :multiplier 2.0 :max "1h")
+   :retry-policies {"fast_fail" (drip/constant-retry-policy "2s")
+                    "slow_job"  (drip/linear-retry-policy "1m" :max "1h")}})
 ```
 
 ## Job timeouts

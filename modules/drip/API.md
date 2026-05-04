@@ -4,6 +4,7 @@
     -  [`cancel-job!`](#s-exp.drip/cancel-job!) - Cancels a job that is not already finalized.
     -  [`complete-job`](#s-exp.drip/complete-job) - Marks a job as :completed.
     -  [`complete-job!`](#s-exp.drip/complete-job!) - Marks a job as :completed.
+    -  [`constant-retry-policy`](#s-exp.drip/constant-retry-policy) - Returns a retry policy fn that always waits <code>delay</code> between retries.
     -  [`default-retention-ms`](#s-exp.drip/default-retention-ms)
     -  [`default-retry-policy`](#s-exp.drip/default-retry-policy) - Default retry policy fn.
     -  [`delete-job`](#s-exp.drip/delete-job) - Hard-deletes a job by ID regardless of state.
@@ -12,15 +13,18 @@
     -  [`delete-jobs!`](#s-exp.drip/delete-jobs!) - Deletes jobs matching opts.
     -  [`discard-job`](#s-exp.drip/discard-job) - Moves a job to :discarded state.
     -  [`discard-job!`](#s-exp.drip/discard-job!) - Moves a job to :discarded state.
+    -  [`exponential-retry-policy`](#s-exp.drip/exponential-retry-policy) - Returns a retry policy fn with configurable exponential backoff.
     -  [`fetch-jobs`](#s-exp.drip/fetch-jobs) - Atomically claims up to limit available jobs from queue.
     -  [`fetch-jobs!`](#s-exp.drip/fetch-jobs!) - Atomically claims up to limit available jobs from queue using the supplied tx.
     -  [`get-job`](#s-exp.drip/get-job) - Returns a Job record by ID using the client's own datasource, or nil if not found.
     -  [`get-job!`](#s-exp.drip/get-job!) - Returns a Job record by ID using the supplied tx, or nil if not found.
+    -  [`immediate-retry-policy`](#s-exp.drip/immediate-retry-policy) - Returns a retry policy fn that retries immediately with no delay.
     -  [`insert-job`](#s-exp.drip/insert-job) - Inserts a job using the client's own datasource.
     -  [`insert-job!`](#s-exp.drip/insert-job!) - Inserts a job using the supplied tx.
     -  [`insert-many`](#s-exp.drip/insert-many) - Inserts multiple jobs in a single transaction using the client's own datasource.
     -  [`insert-many!`](#s-exp.drip/insert-many!) - Inserts multiple jobs in a single transaction using the supplied tx.
     -  [`insert-many-fast!`](#s-exp.drip/insert-many-fast!) - PostgreSQL only.
+    -  [`linear-retry-policy`](#s-exp.drip/linear-retry-policy) - Returns a retry policy fn that waits <code>base</code> * attempt.
     -  [`list-jobs`](#s-exp.drip/list-jobs) - Lists jobs with optional filters.
     -  [`list-jobs!`](#s-exp.drip/list-jobs!) - Lists jobs with optional filters.
     -  [`list-queues`](#s-exp.drip/list-queues) - Returns all queues.
@@ -43,6 +47,8 @@
     -  [`stop-and-cancel!`](#s-exp.drip/stop-and-cancel!) - Immediately interrupts all in-flight jobs and shuts down the executor.
     -  [`stop-executor!`](#s-exp.drip/stop-executor!) - Gracefully stops the executor.
     -  [`stop-periodic-executor!`](#s-exp.drip/stop-periodic-executor!) - Stops the periodic job scheduler.
+    -  [`swap-job`](#s-exp.drip/swap-job) - Fetches a job by ID, applies f to it, and updates writable fields from the returned map.
+    -  [`swap-job!`](#s-exp.drip/swap-job!) - Fetches a job by ID within the supplied tx, applies f to it, and updates writable fields from the returned map.
     -  [`update-job`](#s-exp.drip/update-job) - Updates writable fields of a job.
     -  [`update-job!`](#s-exp.drip/update-job!) - Updates writable fields of a job.
     -  [`upsert-queue`](#s-exp.drip/upsert-queue) - Creates or updates a queue.
@@ -103,9 +109,13 @@
     -  [`with-tx`](#s-exp.drip.db/with-tx) - Opens a transaction from client and binds it to tx-sym, passing remaining args to next.jdbc/with-transaction.
 -  [`s-exp.drip.job`](#s-exp.drip.job) 
     -  [`bitmask->states`](#s-exp.drip.job/bitmask->states) - Converts an integer bitmask to a set of state keywords.
+    -  [`constant-retry-policy`](#s-exp.drip.job/constant-retry-policy) - Returns a retry policy fn that always waits <code>delay</code> between retries.
     -  [`default-insert-opts`](#s-exp.drip.job/default-insert-opts)
     -  [`default-retry-policy`](#s-exp.drip.job/default-retry-policy) - Returns a java.time.Instant for the next retry.
     -  [`default-unique-states`](#s-exp.drip.job/default-unique-states)
+    -  [`exponential-retry-policy`](#s-exp.drip.job/exponential-retry-policy) - Returns a retry policy fn with configurable exponential backoff.
+    -  [`immediate-retry-policy`](#s-exp.drip.job/immediate-retry-policy) - Returns a retry policy fn that retries immediately with no delay.
+    -  [`linear-retry-policy`](#s-exp.drip.job/linear-retry-policy) - Returns a retry policy fn that waits <code>base</code> * attempt.
     -  [`state->bit`](#s-exp.drip.job/state->bit)
     -  [`state-in-bitmask?`](#s-exp.drip.job/state-in-bitmask?) - Returns true if the given state keyword is represented in the bitmask.
     -  [`states`](#s-exp.drip.job/states)
@@ -162,7 +172,7 @@ Drip: a Clojure job queue for MariaDB, PostgreSQL, and SQLite.
 Function.
 
 Cancels a job that is not already finalized. Uses the client's own datasource.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L219-L223">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L239-L243">Source</a></sub></p>
 
 ## <a name="s-exp.drip/cancel-job!">`cancel-job!`</a>
 ``` clojure
@@ -172,7 +182,7 @@ Cancels a job that is not already finalized. Uses the client's own datasource.
 Function.
 
 Cancels a job that is not already finalized. Uses the supplied tx.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L225-L228">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L245-L248">Source</a></sub></p>
 
 ## <a name="s-exp.drip/complete-job">`complete-job`</a>
 ``` clojure
@@ -182,7 +192,7 @@ Cancels a job that is not already finalized. Uses the supplied tx.
 Function.
 
 Marks a job as :completed. Uses the client's own datasource. Returns updated Job record.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L208-L212">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L228-L232">Source</a></sub></p>
 
 ## <a name="s-exp.drip/complete-job!">`complete-job!`</a>
 ``` clojure
@@ -192,13 +202,25 @@ Marks a job as :completed. Uses the client's own datasource. Returns updated Job
 Function.
 
 Marks a job as :completed. Uses the supplied tx. Returns updated Job record.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L214-L217">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L234-L237">Source</a></sub></p>
+
+## <a name="s-exp.drip/constant-retry-policy">`constant-retry-policy`</a>
+
+
+
+
+Returns a retry policy fn that always waits `delay` between retries.
+   `delay` is a duration value: string (e.g. "30s", "2m") or number of milliseconds.
+   Options:
+     :jitter - fractional ± jitter applied to delay (default 0.0)
+   Example: (constant-retry-policy "30s" :jitter 0.1)
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L435-L441">Source</a></sub></p>
 
 ## <a name="s-exp.drip/default-retention-ms">`default-retention-ms`</a>
 
 
 
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L414-L414">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L469-L469">Source</a></sub></p>
 
 ## <a name="s-exp.drip/default-retry-policy">`default-retry-policy`</a>
 
@@ -206,7 +228,8 @@ Marks a job as :completed. Uses the supplied tx. Returns updated Job record.
 
 
 Default retry policy fn. Takes attempt (1-based long), returns java.time.Instant.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L410-L412">Source</a></sub></p>
+   Uses exponential backoff: attempt^4 seconds ± 10% jitter.
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L430-L433">Source</a></sub></p>
 
 ## <a name="s-exp.drip/delete-job">`delete-job`</a>
 ``` clojure
@@ -217,7 +240,7 @@ Function.
 
 Hard-deletes a job by ID regardless of state. Uses the client's own datasource.
    Returns the deleted Job record, or nil if not found.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L253-L258">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L273-L278">Source</a></sub></p>
 
 ## <a name="s-exp.drip/delete-job!">`delete-job!`</a>
 ``` clojure
@@ -228,7 +251,7 @@ Function.
 
 Hard-deletes a job by ID regardless of state. Uses the supplied tx.
    Returns the deleted Job record, or nil if not found.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L260-L264">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L280-L284">Source</a></sub></p>
 
 ## <a name="s-exp.drip/delete-jobs">`delete-jobs`</a>
 ``` clojure
@@ -246,7 +269,7 @@ Deletes jobs matching opts. Uses the client's own datasource.
      :priorities       - coll of priority ints
      :finalized-before - java.time.Instant; only delete with finalized_at <= this
      :created-before   - java.time.Instant; only delete with created_at <= this
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L295-L307">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L315-L327">Source</a></sub></p>
 
 ## <a name="s-exp.drip/delete-jobs!">`delete-jobs!`</a>
 ``` clojure
@@ -257,7 +280,7 @@ Function.
 
 Deletes jobs matching opts. Uses the supplied tx.
    Returns count of deleted jobs. See delete-jobs for opts documentation.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L309-L313">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L329-L333">Source</a></sub></p>
 
 ## <a name="s-exp.drip/discard-job">`discard-job`</a>
 ``` clojure
@@ -267,7 +290,7 @@ Deletes jobs matching opts. Uses the supplied tx.
 Function.
 
 Moves a job to :discarded state. Uses the client's own datasource.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L242-L246">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L262-L266">Source</a></sub></p>
 
 ## <a name="s-exp.drip/discard-job!">`discard-job!`</a>
 ``` clojure
@@ -277,7 +300,22 @@ Moves a job to :discarded state. Uses the client's own datasource.
 Function.
 
 Moves a job to :discarded state. Uses the supplied tx.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L248-L251">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L268-L271">Source</a></sub></p>
+
+## <a name="s-exp.drip/exponential-retry-policy">`exponential-retry-policy`</a>
+
+
+
+
+Returns a retry policy fn with configurable exponential backoff.
+   Waits `base` * multiplier^(attempt-1), capped at `max`.
+   `base` is a duration value: string (e.g. "1s") or number of milliseconds.
+   Options:
+     :multiplier - growth factor (default 2.0)
+     :max        - duration cap on computed delay (default "1h")
+     :jitter     - fractional ± jitter applied to delay (default 0.1)
+   Example: (exponential-retry-policy "1s" :multiplier 2.0 :max "30m" :jitter 0.15)
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L452-L461">Source</a></sub></p>
 
 ## <a name="s-exp.drip/fetch-jobs">`fetch-jobs`</a>
 ``` clojure
@@ -322,6 +360,16 @@ Function.
 
 Returns a Job record by ID using the supplied tx, or nil if not found.
 <p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L143-L146">Source</a></sub></p>
+
+## <a name="s-exp.drip/immediate-retry-policy">`immediate-retry-policy`</a>
+
+
+
+
+Returns a retry policy fn that retries immediately with no delay.
+   Useful for tests or jobs that should be reattempted without waiting.
+   (immediate-retry-policy)
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L463-L467">Source</a></sub></p>
 
 ## <a name="s-exp.drip/insert-job">`insert-job`</a>
 ``` clojure
@@ -396,6 +444,19 @@ PostgreSQL only. High-throughput batch insert using COPY FROM STDIN.
      - PostgreSQL only (uses org.postgresql.copy.CopyManager)
 <p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L106-L120">Source</a></sub></p>
 
+## <a name="s-exp.drip/linear-retry-policy">`linear-retry-policy`</a>
+
+
+
+
+Returns a retry policy fn that waits `base` * attempt.
+   `base` is a duration value: string (e.g. "10s") or number of milliseconds.
+   Options:
+     :max    - duration cap on computed delay (default unbounded)
+     :jitter - fractional ± jitter applied to delay (default 0.0)
+   Example: (linear-retry-policy "10s" :max "5m" :jitter 0.1)
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L443-L450">Source</a></sub></p>
+
 ## <a name="s-exp.drip/list-jobs">`list-jobs`</a>
 ``` clojure
 
@@ -439,7 +500,7 @@ Lists jobs with optional filters. Uses the supplied tx.
 Function.
 
 Returns all queues. Uses the client's own datasource.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L352-L356">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L372-L376">Source</a></sub></p>
 
 ## <a name="s-exp.drip/list-queues!">`list-queues!`</a>
 ``` clojure
@@ -449,7 +510,7 @@ Returns all queues. Uses the client's own datasource.
 Function.
 
 Returns all queues. Uses the supplied tx.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L358-L361">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L378-L381">Source</a></sub></p>
 
 ## <a name="s-exp.drip/migrate!">`migrate!`</a>
 ``` clojure
@@ -469,7 +530,7 @@ Creates all drip_* tables and indexes. Idempotent - safe to call on startup.
 Function.
 
 Pauses a queue - workers stop fetching from it. Uses the client's own datasource.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L330-L334">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L350-L354">Source</a></sub></p>
 
 ## <a name="s-exp.drip/pause-queue!">`pause-queue!`</a>
 ``` clojure
@@ -479,7 +540,7 @@ Pauses a queue - workers stop fetching from it. Uses the client's own datasource
 Function.
 
 Pauses a queue - workers stop fetching from it. Uses the supplied tx.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L336-L339">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L356-L359">Source</a></sub></p>
 
 ## <a name="s-exp.drip/record-output">`record-output`</a>
 ``` clojure
@@ -491,7 +552,7 @@ Function.
 Merges {:output output} into the job's metadata column.
    Uses the client's own datasource. Returns updated Job record.
    Output is accessible as (get-in job [:metadata "output"]) after completion.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L194-L200">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L214-L220">Source</a></sub></p>
 
 ## <a name="s-exp.drip/record-output!">`record-output!`</a>
 ``` clojure
@@ -502,7 +563,7 @@ Function.
 
 Merges {:output output} into the job's metadata column. Uses the supplied tx.
    Returns updated Job record.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L202-L206">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L222-L226">Source</a></sub></p>
 
 ## <a name="s-exp.drip/rescue-stuck-jobs">`rescue-stuck-jobs`</a>
 ``` clojure
@@ -514,7 +575,7 @@ Function.
 Rescues jobs stuck in :running state with attempted_at <= stuck-after.
    Transitions each to :retryable or :discarded (based on attempt vs max-attempts).
    Uses the client's own datasource. Returns count of rescued jobs.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L281-L287">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L301-L307">Source</a></sub></p>
 
 ## <a name="s-exp.drip/rescue-stuck-jobs!">`rescue-stuck-jobs!`</a>
 ``` clojure
@@ -525,7 +586,7 @@ Function.
 
 Rescues jobs stuck in :running state with attempted_at <= stuck-after.
    Uses the supplied tx. Returns count of rescued jobs.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L289-L293">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L309-L313">Source</a></sub></p>
 
 ## <a name="s-exp.drip/resume-queue">`resume-queue`</a>
 ``` clojure
@@ -535,7 +596,7 @@ Rescues jobs stuck in :running state with attempted_at <= stuck-after.
 Function.
 
 Resumes a paused queue. Uses the client's own datasource.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L341-L345">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L361-L365">Source</a></sub></p>
 
 ## <a name="s-exp.drip/resume-queue!">`resume-queue!`</a>
 ``` clojure
@@ -545,7 +606,7 @@ Resumes a paused queue. Uses the client's own datasource.
 Function.
 
 Resumes a paused queue. Uses the supplied tx.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L347-L350">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L367-L370">Source</a></sub></p>
 
 ## <a name="s-exp.drip/retry-job">`retry-job`</a>
 ``` clojure
@@ -556,7 +617,7 @@ Function.
 
 Forces a failed/cancelled/discarded job back to :available.
    Uses the client's own datasource.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L230-L235">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L250-L255">Source</a></sub></p>
 
 ## <a name="s-exp.drip/retry-job!">`retry-job!`</a>
 ``` clojure
@@ -566,7 +627,7 @@ Forces a failed/cancelled/discarded job back to :available.
 Function.
 
 Forces a failed/cancelled/discarded job back to :available. Uses the supplied tx.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L237-L240">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L257-L260">Source</a></sub></p>
 
 ## <a name="s-exp.drip/snooze-job">`snooze-job`</a>
 ``` clojure
@@ -578,7 +639,7 @@ Function.
 Reschedules a :running job to run again after duration without consuming a retry attempt.
    duration - ms number or duration string (e.g. "1h", "30m", "90s").
    Uses the client's own datasource. Returns updated Job record.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L266-L272">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L286-L292">Source</a></sub></p>
 
 ## <a name="s-exp.drip/snooze-job!">`snooze-job!`</a>
 ``` clojure
@@ -590,7 +651,7 @@ Function.
 Reschedules a :running job to run again after duration without consuming a retry attempt.
    duration - ms number or duration string (e.g. "1h", "30m", "90s").
    Uses the supplied tx. Returns updated Job record.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L274-L279">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L294-L299">Source</a></sub></p>
 
 ## <a name="s-exp.drip/start-executor!">`start-executor!`</a>
 ``` clojure
@@ -605,7 +666,7 @@ Starts polling queues and processing jobs.
    Registry handlers receive [client job] as two arguments.
    Handlers must explicitly call complete-job!, snooze-job!, etc. to manage job state.
    Throwing any Throwable signals failure and triggers retry or discard.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L367-L375">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L387-L395">Source</a></sub></p>
 
 ## <a name="s-exp.drip/start-periodic-executor!">`start-periodic-executor!`</a>
 ``` clojure
@@ -616,7 +677,7 @@ Function.
 
 Schedules periodic job insertions. `specs` is a sequence of PeriodicSpec maps.
    Returns a scheduler; stop with stop-periodic-executor!.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L395-L399">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L415-L419">Source</a></sub></p>
 
 ## <a name="s-exp.drip/stop-and-cancel!">`stop-and-cancel!`</a>
 ``` clojure
@@ -628,7 +689,7 @@ Function.
 Immediately interrupts all in-flight jobs and shuts down the executor.
    In-flight jobs remain in :running state; rescue-stuck-jobs will requeue them.
    Use stop-executor! instead when you want to wait for jobs to finish gracefully.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L384-L389">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L404-L409">Source</a></sub></p>
 
 ## <a name="s-exp.drip/stop-executor!">`stop-executor!`</a>
 ``` clojure
@@ -639,7 +700,7 @@ Immediately interrupts all in-flight jobs and shuts down the executor.
 Function.
 
 Gracefully stops the executor. Optional second arg: timeout-ms (default 30000).
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L377-L382">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L397-L402">Source</a></sub></p>
 
 ## <a name="s-exp.drip/stop-periodic-executor!">`stop-periodic-executor!`</a>
 ``` clojure
@@ -649,7 +710,35 @@ Gracefully stops the executor. Optional second arg: timeout-ms (default 30000).
 Function.
 
 Stops the periodic job scheduler.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L401-L404">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L421-L424">Source</a></sub></p>
+
+## <a name="s-exp.drip/swap-job">`swap-job`</a>
+``` clojure
+
+(swap-job client job-id f)
+```
+Function.
+
+Fetches a job by ID, applies f to it, and updates writable fields from the
+   returned map. f receives the Job record and must return a map with any subset
+   of update-job keys:
+     :metadata :priority :queue :scheduled-at :state :max-attempts :tags
+   Uses the client's own datasource. Returns the updated Job record, or nil if not found.
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L204-L212">Source</a></sub></p>
+
+## <a name="s-exp.drip/swap-job!">`swap-job!`</a>
+``` clojure
+
+(swap-job! client tx job-id f)
+```
+Function.
+
+Fetches a job by ID within the supplied tx, applies f to it, and updates
+   writable fields from the returned map. f receives the Job record and must
+   return a map with any subset of update-job keys:
+     :metadata :priority :queue :scheduled-at :state :max-attempts :tags
+   Returns the updated Job record, or nil if not found.
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L194-L202">Source</a></sub></p>
 
 ## <a name="s-exp.drip/update-job">`update-job`</a>
 ``` clojure
@@ -688,7 +777,7 @@ Updates writable fields of a job. Uses the supplied tx. Returns updated Job reco
 Function.
 
 Creates or updates a queue. Uses the client's own datasource.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L319-L323">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L339-L343">Source</a></sub></p>
 
 ## <a name="s-exp.drip/upsert-queue!">`upsert-queue!`</a>
 ``` clojure
@@ -698,7 +787,7 @@ Creates or updates a queue. Uses the client's own datasource.
 Function.
 
 Creates or updates a queue. Uses the supplied tx.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L325-L328">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L345-L348">Source</a></sub></p>
 
 ## <a name="s-exp.drip/with-tx">`with-tx`</a>
 ``` clojure
@@ -1275,13 +1364,26 @@ Opens a transaction from client and binds it to tx-sym, passing remaining
 Function.
 
 Converts an integer bitmask to a set of state keywords.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/job.clj#L31-L39">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/job.clj#L32-L40">Source</a></sub></p>
+
+## <a name="s-exp.drip.job/constant-retry-policy">`constant-retry-policy`</a>
+``` clojure
+
+(constant-retry-policy delay & {:keys [jitter], :or {jitter 0.0}})
+```
+Function.
+
+Returns a retry policy fn that always waits `delay` between retries.
+   `delay` is a duration value: string (e.g. "30s", "2m") or number of milliseconds.
+   Options:
+     :jitter - fractional ± jitter applied to delay (default 0.0)
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/job.clj#L79-L87">Source</a></sub></p>
 
 ## <a name="s-exp.drip.job/default-insert-opts">`default-insert-opts`</a>
 
 
 
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/job.clj#L50-L55">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/job.clj#L51-L56">Source</a></sub></p>
 
 ## <a name="s-exp.drip.job/default-retry-policy">`default-retry-policy`</a>
 ``` clojure
@@ -1291,19 +1393,61 @@ Converts an integer bitmask to a set of state keywords.
 Function.
 
 Returns a java.time.Instant for the next retry. attempt is 1-based.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/job.clj#L68-L71">Source</a></sub></p>
+   Uses exponential backoff: attempt^4 seconds ± 10% jitter.
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/job.clj#L73-L77">Source</a></sub></p>
 
 ## <a name="s-exp.drip.job/default-unique-states">`default-unique-states`</a>
 
 
 
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/job.clj#L47-L48">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/job.clj#L48-L49">Source</a></sub></p>
+
+## <a name="s-exp.drip.job/exponential-retry-policy">`exponential-retry-policy`</a>
+``` clojure
+
+(exponential-retry-policy base & {:keys [multiplier max jitter], :or {multiplier 2.0, max "1h", jitter 0.1}})
+```
+Function.
+
+Returns a retry policy fn with configurable exponential backoff.
+   Waits `base` * multiplier^(attempt-1), capped at `max`.
+   `base` is a duration value: string (e.g. "1s") or number of milliseconds.
+   Options:
+     :multiplier - growth factor (default 2.0)
+     :max        - duration cap on computed delay (default "1h")
+     :jitter     - fractional ± jitter applied to delay (default 0.1)
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/job.clj#L101-L115">Source</a></sub></p>
+
+## <a name="s-exp.drip.job/immediate-retry-policy">`immediate-retry-policy`</a>
+``` clojure
+
+(immediate-retry-policy)
+```
+Function.
+
+Returns a retry policy fn that retries immediately with no delay.
+   Useful for testing or jobs that should be reattempted without waiting.
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/job.clj#L117-L121">Source</a></sub></p>
+
+## <a name="s-exp.drip.job/linear-retry-policy">`linear-retry-policy`</a>
+``` clojure
+
+(linear-retry-policy base & {:keys [max jitter], :or {max Long/MAX_VALUE, jitter 0.0}})
+```
+Function.
+
+Returns a retry policy fn that waits `base` * attempt.
+   `base` is a duration value: string (e.g. "10s") or number of milliseconds.
+   Options:
+     :max    - duration cap on computed delay (default unbounded)
+     :jitter - fractional ± jitter applied to delay (default 0.0)
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/job.clj#L89-L99">Source</a></sub></p>
 
 ## <a name="s-exp.drip.job/state->bit">`state->bit`</a>
 
 
 
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/job.clj#L11-L19">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/job.clj#L12-L20">Source</a></sub></p>
 
 ## <a name="s-exp.drip.job/state-in-bitmask?">`state-in-bitmask?`</a>
 ``` clojure
@@ -1313,13 +1457,13 @@ Returns a java.time.Instant for the next retry. attempt is 1-based.
 Function.
 
 Returns true if the given state keyword is represented in the bitmask.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/job.clj#L41-L44">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/job.clj#L42-L45">Source</a></sub></p>
 
 ## <a name="s-exp.drip.job/states">`states`</a>
 
 
 
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/job.clj#L21-L21">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/job.clj#L22-L22">Source</a></sub></p>
 
 ## <a name="s-exp.drip.job/states->bitmask">`states->bitmask`</a>
 ``` clojure
@@ -1329,7 +1473,7 @@ Returns true if the given state keyword is represented in the bitmask.
 Function.
 
 Converts a collection of state keywords to an integer bitmask.
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/job.clj#L23-L29">Source</a></sub></p>
+<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/job.clj#L24-L30">Source</a></sub></p>
 
 -----
 # <a name="s-exp.drip.periodic">s-exp.drip.periodic</a>

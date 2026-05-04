@@ -433,26 +433,31 @@
   job/default-retry-policy)
 
 (def constant-retry-policy
-  "Returns a retry policy fn that always waits a fixed delay between retries.
-   (constant-retry-policy delay-ms)
-   (constant-retry-policy delay-ms jitter-factor)
-   jitter-factor adds ±fraction of delay-ms as random jitter (default 0)."
+  "Returns a retry policy fn that always waits `delay` between retries.
+   `delay` is a duration value: string (e.g. \"30s\", \"2m\") or number of milliseconds.
+   Options:
+     :jitter - fractional ± jitter applied to delay (default 0.0)
+   Example: (constant-retry-policy \"30s\" :jitter 0.1)"
   job/constant-retry-policy)
 
 (def linear-retry-policy
-  "Returns a retry policy fn that waits base-ms * attempt milliseconds.
-   (linear-retry-policy base-ms)
-   (linear-retry-policy base-ms max-ms)
-   (linear-retry-policy base-ms max-ms jitter-factor)"
+  "Returns a retry policy fn that waits `base` * attempt.
+   `base` is a duration value: string (e.g. \"10s\") or number of milliseconds.
+   Options:
+     :max    - duration cap on computed delay (default unbounded)
+     :jitter - fractional ± jitter applied to delay (default 0.0)
+   Example: (linear-retry-policy \"10s\" :max \"5m\" :jitter 0.1)"
   job/linear-retry-policy)
 
 (def exponential-retry-policy
   "Returns a retry policy fn with configurable exponential backoff.
-   (exponential-retry-policy base-ms)
-   (exponential-retry-policy base-ms multiplier)
-   (exponential-retry-policy base-ms multiplier max-ms)
-   (exponential-retry-policy base-ms multiplier max-ms jitter-factor)
-   Defaults: multiplier=2.0, max-ms=3600000 (1h), jitter-factor=0.1."
+   Waits `base` * multiplier^(attempt-1), capped at `max`.
+   `base` is a duration value: string (e.g. \"1s\") or number of milliseconds.
+   Options:
+     :multiplier - growth factor (default 2.0)
+     :max        - duration cap on computed delay (default \"1h\")
+     :jitter     - fractional ± jitter applied to delay (default 0.1)
+   Example: (exponential-retry-policy \"1s\" :multiplier 2.0 :max \"30m\" :jitter 0.15)"
   job/exponential-retry-policy)
 
 (def immediate-retry-policy
