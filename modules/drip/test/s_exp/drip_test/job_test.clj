@@ -107,7 +107,7 @@
   (testing "constant-retry-policy with jitter stays within expected range"
     (let [delay-ms 10000
           jitter 0.2
-          policy (job/constant-retry-policy "10s" jitter)
+          policy (job/constant-retry-policy "10s" :jitter jitter)
           now (.toEpochMilli (Instant/now))
           samples (repeatedly 20 #(.toEpochMilli ^Instant (policy 1)))
           lo (+ now (long (* delay-ms (- 1 jitter))))
@@ -130,13 +130,13 @@
       (is (< (Math/abs (- t3 3000)) 50))))
 
   (testing "linear-retry-policy respects max cap"
-    (let [policy (job/linear-retry-policy "1s" "2500ms")
+    (let [policy (job/linear-retry-policy "1s" :max "2500ms")
           now (.toEpochMilli (Instant/now))
           t10 (- (.toEpochMilli ^Instant (policy 10)) now)]
       (is (<= t10 2500))))
 
   (testing "exponential-retry-policy delay grows exponentially"
-    (let [policy (job/exponential-retry-policy "1s" 2.0 Long/MAX_VALUE 0.0)
+    (let [policy (job/exponential-retry-policy "1s" :multiplier 2.0 :max Long/MAX_VALUE :jitter 0.0)
           now (.toEpochMilli (Instant/now))
           t1 (- (.toEpochMilli ^Instant (policy 1)) now)
           t2 (- (.toEpochMilli ^Instant (policy 2)) now)
@@ -148,7 +148,7 @@
       (is (< (Math/abs (- t3 4000)) 50))))
 
   (testing "exponential-retry-policy respects max cap"
-    (let [policy (job/exponential-retry-policy "1s" 2.0 "5s" 0.0)
+    (let [policy (job/exponential-retry-policy "1s" :multiplier 2.0 :max "5s" :jitter 0.0)
           now (.toEpochMilli (Instant/now))
           t10 (- (.toEpochMilli ^Instant (policy 10)) now)]
       (is (<= t10 5000))))

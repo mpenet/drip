@@ -322,20 +322,20 @@ Drip ships several built-in policy constructors. All take attempt (1-based long)
 drip/default-retry-policy
 
 ;; Always wait a fixed delay (duration string or raw ms number)
-(drip/constant-retry-policy "30s")              ; 30s
-(drip/constant-retry-policy "30s" 0.1)          ; 30s ± 10% jitter
-(drip/constant-retry-policy 30000)              ; same, as raw ms
+(drip/constant-retry-policy "30s")                       ; 30s
+(drip/constant-retry-policy "30s" :jitter 0.1)           ; 30s ± 10% jitter
+(drip/constant-retry-policy 30000)                       ; same, as raw ms
 
 ;; Delay grows linearly with attempt: base * attempt
-(drip/linear-retry-policy "10s")                ; 10s, 20s, 30s, …
-(drip/linear-retry-policy "10s" "5m")           ; capped at 5m
-(drip/linear-retry-policy "10s" "5m" 0.1)       ; + 10% jitter
+(drip/linear-retry-policy "10s")                         ; 10s, 20s, 30s, …
+(drip/linear-retry-policy "10s" :max "5m")               ; capped at 5m
+(drip/linear-retry-policy "10s" :max "5m" :jitter 0.1)  ; + 10% jitter
 
 ;; Configurable exponential backoff: base * multiplier^(attempt-1)
-(drip/exponential-retry-policy "1s")            ; 1s, 2s, 4s, … capped at 1h
-(drip/exponential-retry-policy "1s" 3.0)        ; 1s, 3s, 9s, …
-(drip/exponential-retry-policy "1s" 2.0 "30m")  ; capped at 30m
-(drip/exponential-retry-policy "1s" 2.0 "30m" 0.15) ; + 15% jitter
+(drip/exponential-retry-policy "1s")                                          ; 1s, 2s, 4s, … capped at 1h
+(drip/exponential-retry-policy "1s" :multiplier 3.0)                          ; 1s, 3s, 9s, …
+(drip/exponential-retry-policy "1s" :multiplier 2.0 :max "30m")               ; capped at 30m
+(drip/exponential-retry-policy "1s" :multiplier 2.0 :max "30m" :jitter 0.15) ; + 15% jitter
 
 ;; Retry immediately — useful for tests or idempotent fast-fail jobs
 (drip/immediate-retry-policy)
@@ -352,7 +352,7 @@ Use per-kind overrides via `:retry-policies` in `start-executor!`:
   {:client  client
    :registry {"slow_job" slow-handler
               "fast_job" fast-handler}
-   :retry-policy  (drip/exponential-retry-policy "5s" 2.0 "1h")
+   :retry-policy  (drip/exponential-retry-policy "5s" :multiplier 2.0 :max "1h")
    :retry-policies {"fast_job" (drip/constant-retry-policy "2s")}})
 ```
 
@@ -492,17 +492,6 @@ Migration SQL lives in `resources/migrations/<dialect>/001_initial_schema.sql`. 
 | MariaDB | 10.6 | `FOR UPDATE SKIP LOCKED`, `JSON_ARRAY_APPEND` |
 | PostgreSQL | 10 | `FOR UPDATE SKIP LOCKED`, `GENERATED ALWAYS AS IDENTITY`, `LISTEN`/`NOTIFY` on `drip_insert` |
 | SQLite | 3.38.0 | No `SKIP LOCKED`; WAL mode; timestamps as ISO-8601 text; no notifications |
-
-## Differences from RiverQueue
-
-| River feature | Drip |
-|---|---|
-| PostgreSQL only | MariaDB 10.6+, PostgreSQL 10+, SQLite 3.38.0+ |
-| `bytea` / `jsonb[]` / `text[]` | Dialect-specific column types |
-| Partial unique index (state predicate) | NULL-safe UNIQUE index (NULLs don't conflict) |
-| Leader election (`river_leader`) | Not ported |
-| Client tracking tables | Not ported |
-| `pg_notify` / LISTEN | PostgreSQL only; MariaDB/SQLite use polling |
 
 ## Web UI
 
