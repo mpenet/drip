@@ -14,6 +14,36 @@ Drip is basically a port of RiverQueue in clojure.
 
 **Requires Java 21+.**
 
+## Why transactional enqueueing?
+
+Most job queues require two separate writes: one to your database, one to the queue. Between them, anything can go wrong — a crash, a network partition, a rollback — leaving your data and your queued work inconsistent.
+
+Drip enqueues jobs in the same transaction as your business logic:
+
+```clojure
+;; Both the order row and the job are committed atomically.
+;; If the transaction rolls back, neither exists.
+(drip/with-tx [tx client]
+  (insert-order! tx order-data)
+  (drip/insert-job! client tx "send_confirmation" {:order-id order-id}))
+```
+
+Jobs are invisible to workers until the transaction commits. No polling delay, no phantom jobs from rolled-back writes. This eliminates a whole class of distributed systems problems without adding any infrastructure.
+
+## Features
+
+- Transactional job insertion — enqueue inside your own DB transactions
+- Atomic job claiming
+- Job priorities (1–4), scheduled execution, retries with exponential backoff
+- Unique job constraints (by args, time period, queue)
+- Per-kind retry policies and execution timeouts
+- Queue pause/resume
+- Periodic (fixed-interval) jobs
+- Outbox pattern — complete jobs atomically with your own business writes
+- Virtual threads (Java 21+)
+- [Web UI](modules/drip-ui) — browse and manage jobs and queues in real time
+
+
 ## Why a database-backed queue?
 
 The conventional wisdom is that databases make poor queues — and for the wrong
@@ -51,34 +81,6 @@ and you don't get durable pub/sub fan-out to independent consumer groups. If you
 need those things, use the right tool. But if you need reliable background job
 processing with transactional guarantees and you're already running PostgreSQL
 or MariaDB, adding a broker is pure overhead.
-
-## Why transactional enqueueing?
-
-Most job queues require two separate writes: one to your database, one to the queue. Between them, anything can go wrong — a crash, a network partition, a rollback — leaving your data and your queued work inconsistent.
-
-Drip enqueues jobs in the same transaction as your business logic:
-
-```clojure
-;; Both the order row and the job are committed atomically.
-;; If the transaction rolls back, neither exists.
-(drip/with-tx [tx client]
-  (insert-order! tx order-data)
-  (drip/insert-job! client tx "send_confirmation" {:order-id order-id}))
-```
-
-Jobs are invisible to workers until the transaction commits. No polling delay, no phantom jobs from rolled-back writes. This eliminates a whole class of distributed systems problems without adding any infrastructure.
-
-## Features
-
-- Transactional job insertion — enqueue inside your own DB transactions
-- Atomic job claiming
-- Job priorities (1–4), scheduled execution, retries with exponential backoff
-- Unique job constraints (by args, time period, queue)
-- Per-kind retry policies and execution timeouts
-- Queue pause/resume
-- Periodic (fixed-interval) jobs
-- Outbox pattern — complete jobs atomically with your own business writes
-- Virtual threads (Java 21+)
 
 ## Dependency
 
