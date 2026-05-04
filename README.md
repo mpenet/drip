@@ -14,6 +14,44 @@ Drip is basically a port of RiverQueue in clojure.
 
 **Requires Java 21+.**
 
+## Why a database-backed queue?
+
+The conventional wisdom is that databases make poor queues — and for the wrong
+workloads, that's true. But for most applications, it's the opposite of true.
+
+**The "database queues don't scale" argument applies at a scale you probably
+don't have.** A modern PostgreSQL or MariaDB instance handles thousands of job
+inserts and claims per second without breaking a sweat. Dedicated brokers like
+Redis or Kafka earn their complexity at hundreds of thousands of events per
+second, or when you need cross-service fan-out, stream replay, or multi-consumer
+topic semantics. Background jobs for a web application are rarely in that
+category.
+
+What you get by staying in your database:
+
+- **Zero new infrastructure.** No Redis, no RabbitMQ, no Kafka, no SQS. One
+  fewer thing to operate, monitor, secure, back up, and pay for.
+- **Transactional correctness for free.** Enqueue inside your existing
+  transactions. The job exists if and only if your data exists. This is
+  [genuinely hard to
+  replicate](https://brandur.org/transactionally-staged-job-drains) with an
+  external broker.
+- **Familiar tooling.** `SELECT`, `EXPLAIN`, `psql`, your existing backups, your
+  existing monitoring. No new query language, no new client library, no new
+  failure modes.
+- **SKIP LOCKED works.** PostgreSQL and MariaDB both support `SELECT ... FOR
+  UPDATE SKIP LOCKED`, which makes concurrent job claiming efficient and
+  contention-free. This is the key primitive that makes database queues
+  practical at real throughput.
+- **Operational simplicity.** The job table is just a table. You can query it,
+  export it, restore it from a backup, and reason about it with standard SQL.
+
+The trade-offs are real: you won't hit 1M jobs/sec on a single Postgres node,
+and you don't get durable pub/sub fan-out to independent consumer groups. If you
+need those things, use the right tool. But if you need reliable background job
+processing with transactional guarantees and you're already running PostgreSQL
+or MariaDB, adding a broker is pure overhead.
+
 ## Why transactional enqueueing?
 
 Most job queues require two separate writes: one to your database, one to the queue. Between them, anything can go wrong — a crash, a network partition, a rollback — leaving your data and your queued work inconsistent.
