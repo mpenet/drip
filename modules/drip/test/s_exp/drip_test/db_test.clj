@@ -733,6 +733,47 @@
       (is (= {"via" "tx"} (:metadata updated))))))
 
 ;; ---------------------------------------------------------------------------
+;; swap-job
+;; ---------------------------------------------------------------------------
+
+(deftest swap-job-test
+  (testing "applies f and updates returned fields"
+    (let [j (drip/insert-job *client* "k" {} {:priority 2})
+          result (drip/swap-job *client* (:id j)
+                                (fn [job] {:priority (inc (:priority job))}))]
+      (is (= 3 (:priority result)))))
+
+  (testing "f receives current job state"
+    (let [j (drip/insert-job *client* "k" {} {:metadata {:x 1}})
+          result (drip/swap-job *client* (:id j)
+                                (fn [job] {:metadata (update (:metadata job) "x" inc)}))]
+      (is (= {"x" 2} (:metadata result)))))
+
+  (testing "multiple fields updated atomically"
+    (let [j (drip/insert-job *client* "k" {} {:priority 1})
+          result (drip/swap-job *client* (:id j)
+                                (fn [_job] {:priority 4 :queue "other" :tags ["swapped"]}))]
+      (is (= 4 (:priority result)))
+      (is (= "other" (:queue result)))
+      (is (= ["swapped"] (:tags result)))))
+
+  (testing "returns nil for unknown job id"
+    (is (nil? (drip/swap-job *client* -1 (fn [_] {:priority 2})))))
+
+  (testing "swap-job! with explicit tx"
+    (let [j (drip/insert-job *client* "k" {} {:priority 1})
+          result (drip/with-tx [tx *client*]
+                   (drip/swap-job! *client* tx (:id j)
+                                   (fn [job] {:priority (+ 2 (:priority job))})))]
+      (is (= 3 (:priority result)))))
+
+  (testing "persisted — get-job reflects swap"
+    (let [j (drip/insert-job *client* "k" {} {:priority 1})
+          _ (drip/swap-job *client* (:id j) (fn [_] {:queue "swapped-q"}))
+          fetched (drip/get-job *client* (:id j))]
+      (is (= "swapped-q" (:queue fetched))))))
+
+;; ---------------------------------------------------------------------------
 ;; snooze-job
 ;; ---------------------------------------------------------------------------
 
