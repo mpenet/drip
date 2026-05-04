@@ -9,6 +9,12 @@ Web UI for [drip](../drip) — browse and manage jobs and queues in real time.
 - **Queues list** — all queues with pause/active status
 - **Queue detail** — per-state job counts with visual distribution bar, pause/resume
 
+<img width="1624" height="1061" alt="Screenshot 2026-05-04 at 20 53 26" src="https://github.com/user-attachments/assets/2fe918f3-3784-403e-be4f-f82d57005c77" />
+<img width="1624" height="1061" alt="Screenshot 2026-05-04 at 20 53 34" src="https://github.com/user-attachments/assets/cd18821a-20a7-4a93-8643-a954d5a418cf" />
+<img width="1624" height="1061" alt="Screenshot 2026-05-04 at 20 53 43" src="https://github.com/user-attachments/assets/51b7c20f-9049-4367-8882-713c76b76f4c" />
+<img width="1624" height="1061" alt="Screenshot 2026-05-04 at 20 53 56" src="https://github.com/user-attachments/assets/78816437-965f-42da-8dc5-32a8081b17bf" />
+
+
 ## Requirements
 
 - Java 21+
