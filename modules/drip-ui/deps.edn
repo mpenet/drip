@@ -1,8 +1,6 @@
 {:paths ["src" "resources"]
  :deps {org.clojure/clojure {:mvn/version "1.12.1"}
-        com.s-exp/drip {:git/sha "047b2fc917425d468da4596bb42676eb75d7cb8e"
-                        :git/url "git@github.com:mpenet/drip.git"
-                        :deps/root "modules/drip"}
+        com.s-exp/drip {:local/root "../drip"}
         com.s-exp/hirundo {:mvn/version "1.0.0-alpha213"}
         org.clojure/core.async {:mvn/version "1.8.741"}
         com.zaxxer/HikariCP {:mvn/version "5.1.0"}

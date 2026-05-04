@@ -4,17 +4,17 @@
             [clojure.tools.build.api :as b]
             [clojure.tools.build.tasks.uber :as uber]))
 
-(def lib 's-exp.drip-ui)
+(def lib 'drip-ui)
 (def version "0.1.0-SNAPSHOT")
-(def main 's-exp.drip-ui.main)
+(def main 's-exp.drip-ui)
 (def class-dir "target/classes")
 (defn- uber-opts [opts]
   (assoc opts
          :lib lib :main main
-         :uber-file (format "target/%s-%s.jar" lib version)
+         :uber-file (format "target/%s.jar" lib)
          :basis (b/create-basis {})
          :class-dir class-dir
-         :src-dirs ["src"]
+         :src-dirs ["src" "resources"]
          :ns-compile [main]))
 
 (defn append-json
@@ -31,7 +31,7 @@
   (b/delete {:path "target"})
   (let [opts (uber-opts opts)]
     (println "\nCopying source...")
-    (b/copy-dir {:src-dirs ["src"] :target-dir class-dir})
+    (b/copy-dir {:src-dirs ["src" "resources"] :target-dir class-dir})
     (println (str "\nCompiling " main "..."))
     (b/compile-clj opts)
     (println "\nBuilding JAR...")
