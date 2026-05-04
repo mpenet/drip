@@ -384,6 +384,13 @@ One job per period window — duplicate insertions are silently discarded.
    :tags ["vip"]
    :scheduled-at (Instant/now)})   ; also transitions state to :available/:scheduled
 
+;; Swap — fetch, transform, update atomically
+(drip/swap-job client job-id
+  (fn [job] {:priority (max 1 (dec (:priority job)))}))
+
+(drip/swap-job! client tx job-id
+  (fn [job] {:metadata (assoc (:metadata job) "retried-by" "admin")}))
+
 ;; Fetch jobs (normally done by the executor)
 (drip/fetch-jobs client "default" "worker-id" :limit 10)
 (drip/fetch-jobs! client tx "default" "worker-id" {:limit 10})

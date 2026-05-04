@@ -191,6 +191,26 @@
   [client tx job-id opts]
   (client/update-job! client tx job-id opts))
 
+(defn swap-job!
+  "Fetches a job by ID within the supplied tx, applies f to it, and updates
+   writable fields from the returned map. f receives the Job record and must
+   return a map with any subset of update-job keys:
+     :metadata :priority :queue :scheduled-at :state :max-attempts :tags
+   Returns the updated Job record, or nil if not found."
+  [client tx job-id f]
+  (when-let [job (client/get-job! client tx job-id)]
+    (client/update-job! client tx job-id (f job))))
+
+(defn swap-job
+  "Fetches a job by ID, applies f to it, and updates writable fields from the
+   returned map. f receives the Job record and must return a map with any subset
+   of update-job keys:
+     :metadata :priority :queue :scheduled-at :state :max-attempts :tags
+   Uses the client's own datasource. Returns the updated Job record, or nil if not found."
+  [client job-id f]
+  (with-tx [tx client]
+    (swap-job! client tx job-id f)))
+
 (defn record-output
   "Merges {:output output} into the job's metadata column.
    Uses the client's own datasource. Returns updated Job record.
