@@ -43,6 +43,9 @@ Jobs are invisible to workers until the transaction commits. No polling delay, n
 - Virtual threads (Java 21+)
 - [Web UI](modules/drip-ui) — browse and manage jobs and queues in real time
 
+<p align=center><img width="812" height="530"  alt="Screenshot 2026-05-04 at 20 53 26" src="https://github.com/user-attachments/assets/0a2805ed-bdce-40ca-b02a-debee7a377c5" /></p>
+
+
 
 ## Why a database-backed queue?
 
