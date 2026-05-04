@@ -1,4 +1,4 @@
-# Drip [![Tests](https://github.com/mpenet/drip/actions/workflows/test.yml/badge.svg)](https://github.com/mpenet/drip/actions/workflows/test.yml) [![Clojars Project](https://img.shields.io/clojars/v/com.s-exp/flux.svg)](https://clojars.org/com.s-exp/flux) 
+# Drip [![Tests](https://github.com/mpenet/drip/actions/workflows/test.yml/badge.svg)](https://github.com/mpenet/drip/actions/workflows/test.yml) [![Clojars Project](https://img.shields.io/clojars/v/com.s-exp/drip.svg)](https://clojars.org/com.s-exp/drip) 
 
 
 <p align="center"><img align="center" width="150" height="150"  src="https://github.com/user-attachments/assets/85264171-b386-4a29-85f3-1a8070f0389d" /></p>
