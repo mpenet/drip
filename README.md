@@ -463,17 +463,8 @@ Migration SQL lives in `resources/migrations/<dialect>/001_initial_schema.sql`. 
 
 [drip-ui](modules/drip-ui) is an optional web dashboard for browsing and managing jobs and queues. It connects directly to your drip database via a JDBC URL — no extra infrastructure.
 
-```bash
-DRIP_JDBC_URL=jdbc:postgresql://localhost:5432/mydb?user=postgres&password=postgres \
-  clojure -M:run
-```
+<img width="1624" height="1061" alt="Screenshot 2026-05-04 at 20 53 26" src="https://github.com/user-attachments/assets/27623b48-1329-47c2-8182-966f6bcd1e02" />
 
-Or via Docker (built from the repo root):
-
-```bash
-docker build -f modules/drip-ui/Dockerfile -t drip-ui .
-docker run -e DRIP_JDBC_URL=... -p 8080:8080 drip-ui
-```
 
 See [modules/drip-ui/README.md](modules/drip-ui/README.md) for full details.
 
