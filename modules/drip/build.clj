@@ -28,8 +28,8 @@
                 :pom-data
                 [[:licenses
                   [:license
-                   [:name "EPL 1.0"]
-                   [:url "https://www.eclipse.org/legal/epl/epl-v10.html"]
+                   [:name "MPL 2.0"]
+                   [:url "https://www.mozilla.org/en-US/MPL/2.0/"]
                    [:distribution "repo"]]]]})
   (b/copy-dir {:src-dirs copy-srcs
                :target-dir class-dir})
