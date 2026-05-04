@@ -1,4 +1,4 @@
-(ns drip-ui.format
+(ns s-exp.drip-ui.format
   (:import (java.time Instant ZoneOffset)
            (java.time.format DateTimeFormatter)))
 

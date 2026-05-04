@@ -1,12 +1,12 @@
-(ns drip-ui.views.jobs
+(ns s-exp.drip-ui.views.jobs
   (:require [clojure.core.async :as async]
             [clojure.string :as str]
             [dev.onionpancakes.chassis.core :as h]
-            [drip-ui.datastar :as ds]
-            [drip-ui.format :as fmt]
-            [drip-ui.views.layout :as layout]
             [next.jdbc :as jdbc]
             [s-exp.drip :as drip]
+            [s-exp.drip-ui.datastar :as ds]
+            [s-exp.drip-ui.format :as fmt]
+            [s-exp.drip-ui.views.layout :as layout]
             [s-exp.hirundo.sse :as sse]))
 
 (def ^:private page-size 50)

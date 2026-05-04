@@ -1,9 +1,9 @@
-(ns drip-ui.views.queue-detail
+(ns s-exp.drip-ui.views.queue-detail
   (:require [dev.onionpancakes.chassis.core :as h]
-            [drip-ui.format :as fmt]
-            [drip-ui.views.layout :as layout]
             [next.jdbc :as jdbc]
-            [s-exp.drip :as drip]))
+            [s-exp.drip :as drip]
+            [s-exp.drip-ui.format :as fmt]
+            [s-exp.drip-ui.views.layout :as layout]))
 
 (def ^:private state-order
   [:running :available :scheduled :retryable :pending :completed :cancelled :discarded])

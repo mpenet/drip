@@ -1,4 +1,4 @@
-(ns drip-ui.views.layout
+(ns s-exp.drip-ui.views.layout
   (:require [dev.onionpancakes.chassis.core :as h]))
 
 (def ^:private theme-script

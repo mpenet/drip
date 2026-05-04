@@ -1,6 +1,8 @@
 {:paths ["src" "resources"]
  :deps {org.clojure/clojure {:mvn/version "1.12.1"}
-        com.s-exp/drip {:local/root "../drip"}
+        com.s-exp/drip {:git/sha "1c72d34bf7573396cb58a702bfef1bc005095c9f"
+                        :git/url "git@github.com:mpenet/drip.git"
+                        :git/deps-root "modules/drip"}
         com.s-exp/hirundo {:mvn/version "1.0.0-alpha213"}
         org.clojure/core.async {:mvn/version "1.8.741"}
         com.zaxxer/HikariCP {:mvn/version "5.1.0"}
@@ -11,5 +13,6 @@
         org.mariadb.jdbc/mariadb-java-client {:mvn/version "3.4.1"}}
  :aliases
  {:build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.9"}}
-          :ns-default build}
+          :ns-default build
+          :jvm-opts ["-Dclojure.main.report=stderr"]}
   :run {:main-opts ["-m" "drip-ui"]}}}

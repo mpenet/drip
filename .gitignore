@@ -30,3 +30,4 @@ modules/*/.clj-kondo/imports
 /checkouts
 /classes
 /target
+/modules/drip-ui/target/

@@ -420,6 +420,24 @@ Migration SQL lives in `resources/migrations/<dialect>/001_initial_schema.sql`. 
 | Client tracking tables | Not ported |
 | `pg_notify` / LISTEN | PostgreSQL only; MariaDB/SQLite use polling |
 
+## Web UI
+
+[drip-ui](modules/drip-ui) is an optional web dashboard for browsing and managing jobs and queues. It connects directly to your drip database via a JDBC URL — no extra infrastructure.
+
+```bash
+DRIP_JDBC_URL=jdbc:postgresql://localhost:5432/mydb?user=postgres&password=postgres \
+  clojure -M:run
+```
+
+Or via Docker (built from the repo root):
+
+```bash
+docker build -f modules/drip-ui/Dockerfile -t drip-ui .
+docker run -e DRIP_JDBC_URL=... -p 8080:8080 drip-ui
+```
+
+See [modules/drip-ui/README.md](modules/drip-ui/README.md) for full details.
+
 ## License
 
 Copyright © 2026 Max Penet

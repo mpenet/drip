@@ -1,9 +1,9 @@
-(ns drip-ui.views.job-detail
+(ns s-exp.drip-ui.views.job-detail
   (:require [dev.onionpancakes.chassis.core :as h]
-            [drip-ui.format :as fmt]
-            [drip-ui.views.layout :as layout]
             [jsonista.core :as json]
-            [s-exp.drip :as drip]))
+            [s-exp.drip :as drip]
+            [s-exp.drip-ui.format :as fmt]
+            [s-exp.drip-ui.views.layout :as layout]))
 
 (defn- render-errors [errors]
   (if (seq errors)

@@ -1,4 +1,4 @@
-(ns drip-ui.datastar
+(ns s-exp.drip-ui.datastar
   "Datastar SSE event helpers."
   (:require [jsonista.core :as json]))
 

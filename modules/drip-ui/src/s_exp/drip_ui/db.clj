@@ -1,4 +1,4 @@
-(ns drip-ui.db
+(ns s-exp.drip-ui.db
   (:import (com.zaxxer.hikari HikariConfig HikariDataSource)))
 
 (defn make-datasource

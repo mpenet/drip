@@ -1,6 +1,6 @@
-(ns drip-ui
-  (:require [drip-ui.db :as db]
-            [drip-ui.routes :as routes]
+(ns s-exp.drip-ui
+  (:require [s-exp.drip-ui.db :as db]
+            [s-exp.drip-ui.routes :as routes]
             [s-exp.hirundo :as hirundo])
   (:import (com.zaxxer.hikari HikariDataSource)))
 

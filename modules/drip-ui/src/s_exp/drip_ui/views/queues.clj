@@ -1,8 +1,8 @@
-(ns drip-ui.views.queues
+(ns s-exp.drip-ui.views.queues
   (:require [dev.onionpancakes.chassis.core :as h]
-            [drip-ui.format :as fmt]
-            [drip-ui.views.layout :as layout]
-            [s-exp.drip :as drip]))
+            [s-exp.drip :as drip]
+            [s-exp.drip-ui.format :as fmt]
+            [s-exp.drip-ui.views.layout :as layout]))
 
 (defn- queue-row [queue]
   (let [qname (:name queue)

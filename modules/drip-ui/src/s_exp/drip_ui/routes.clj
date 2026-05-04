@@ -1,12 +1,12 @@
-(ns drip-ui.routes
+(ns s-exp.drip-ui.routes
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
-            [drip-ui.views.job-detail :as job-detail]
-            [drip-ui.views.jobs :as jobs]
-            [drip-ui.views.queue-detail :as queue-detail]
-            [drip-ui.views.queues :as queues]
             [s-exp.appia :as appia]
-            [s-exp.drip :as drip])
+            [s-exp.drip :as drip]
+            [s-exp.drip-ui.views.job-detail :as job-detail]
+            [s-exp.drip-ui.views.jobs :as jobs]
+            [s-exp.drip-ui.views.queue-detail :as queue-detail]
+            [s-exp.drip-ui.views.queues :as queues])
   (:import (java.net URLDecoder URLEncoder)))
 
 ;; ---------------------------------------------------------------------------
@@ -52,7 +52,7 @@
   (if-let [resource (io/resource (str "public/" path))]
     {:status 200
      :headers {"content-type" (cond
-                                (str/ends-with? path ".js")  "text/javascript"
+                                (str/ends-with? path ".js") "text/javascript"
                                 (str/ends-with? path ".css") "text/css"
                                 (str/ends-with? path ".png") "image/png"
                                 (str/ends-with? path ".svg") "image/svg+xml"
