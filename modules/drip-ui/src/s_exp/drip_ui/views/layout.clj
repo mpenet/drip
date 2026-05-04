@@ -15,9 +15,7 @@
   })();")
 
 (def ^:private theme-toggle-script
-  "var _themeOrder = ['light', 'dark', 'system'];
-  var _themeLabels = {'light': '☾ Dark', 'dark': '⊙ System', 'system': '☀ Light'};
-  function _currentThemePref() {
+  "function _currentThemePref() {
     return localStorage.getItem('drip-theme') || 'system';
   }
   function _applyTheme(pref) {
@@ -33,22 +31,23 @@
       html.setAttribute('data-theme', pref);
     }
   }
-  function _updateLabel(pref) {
-    var btn = document.getElementById('theme-btn');
-    if (btn) btn.textContent = _themeLabels[pref];
+  function _updateActive(pref) {
+    document.querySelectorAll('.theme-option').forEach(function(el) {
+      el.classList.toggle('active', el.dataset.theme === pref);
+    });
   }
-  function toggleTheme() {
-    var cur = _currentThemePref();
-    var next = _themeOrder[(_themeOrder.indexOf(cur) + 1) % _themeOrder.length];
-    if (next === 'system') {
+  function setTheme(pref) {
+    if (pref === 'system') {
       localStorage.removeItem('drip-theme');
     } else {
-      localStorage.setItem('drip-theme', next);
+      localStorage.setItem('drip-theme', pref);
     }
-    _applyTheme(next);
-    _updateLabel(next);
+    _applyTheme(pref);
+    _updateActive(pref);
+    var details = document.getElementById('theme-picker');
+    if (details) details.removeAttribute('open');
   }
-  (function() { _updateLabel(_currentThemePref()); })();")
+  (function() { _updateActive(_currentThemePref()); })();")
 
 (defn page
   "Wraps content in the full HTML page shell.
@@ -73,7 +72,12 @@
        [:div {:class "nav-tabs"}
         [:a {:href "/jobs" :class (str "nav-tab" (when (= active-tab :jobs) " active"))} "Jobs"]
         [:a {:href "/queues" :class (str "nav-tab" (when (= active-tab :queues) " active"))} "Queues"]]
-       [:button {:id "theme-btn" :class "theme-toggle" :onclick "toggleTheme()"} "☾ Dark"]]
+       [:details {:id "theme-picker" :class "theme-picker"}
+        [:summary {:class "theme-toggle" :title "Theme"} "◑"]
+        [:div {:class "theme-menu"}
+         [:button {:class "theme-option" :data-theme "light" :onclick "setTheme('light')"} "☀ Light"]
+         [:button {:class "theme-option" :data-theme "dark" :onclick "setTheme('dark')"} "☾ Dark"]
+         [:button {:class "theme-option" :data-theme "system" :onclick "setTheme('system')"} "⊙ System"]]]]
       [:script (h/raw theme-toggle-script)]
       (into [:main {:class "container"}]
             (if (sequential? content) content [content]))]]]))

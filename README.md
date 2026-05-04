@@ -54,7 +54,7 @@ don't have.** A modern PostgreSQL or MariaDB instance handles thousands of job
 inserts and claims per second without breaking a sweat. Dedicated brokers like
 Redis or Kafka earn their complexity at hundreds of thousands of events per
 second, or when you need cross-service fan-out, stream replay, or multi-consumer
-topic semantics. Background jobs for a web application are rarely in that
+topic semantics. Background jobs for most application are rarely in that
 category.
 
 What you get by staying in your database:
@@ -63,8 +63,7 @@ What you get by staying in your database:
   fewer thing to operate, monitor, secure, back up, and pay for.
 - **Transactional correctness for free.** Enqueue inside your existing
   transactions. The job exists if and only if your data exists. This is
-  [genuinely hard to
-  replicate](https://brandur.org/transactionally-staged-job-drains) with an
+  [genuinely hard to replicate](https://brandur.org/job-drain) with an
   external broker.
 - **Familiar tooling.** `SELECT`, `EXPLAIN`, `psql`, your existing backups, your
   existing monitoring. No new query language, no new client library, no new

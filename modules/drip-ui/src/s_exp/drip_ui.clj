@@ -1,4 +1,5 @@
 (ns s-exp.drip-ui
+  (:gen-class)
   (:require [s-exp.drip-ui.db :as db]
             [s-exp.drip-ui.routes :as routes]
             [s-exp.hirundo :as hirundo])
