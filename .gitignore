@@ -31,3 +31,4 @@ modules/*/.clj-kondo/imports
 /classes
 /target
 /modules/drip-ui/target/
+/modules/drip/target/

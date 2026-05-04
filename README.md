@@ -86,7 +86,7 @@ or MariaDB, adding a broker is pure overhead.
 
 ## Dependency
 
-[![Clojars Project](https://img.shields.io/clojars/v/com.s-exp/flux.svg)](https://clojars.org/com.s-exp/flux)
+[![Clojars Project](https://img.shields.io/clojars/v/com.s-exp/drip.svg)](https://clojars.org/com.s-exp/drip)
 
 Add the JDBC driver for your database:
 
