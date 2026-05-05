@@ -473,7 +473,7 @@ One job per period window — duplicate insertions are silently discarded.
 
 ## Schema
 
-Migration SQL lives in `resources/migrations/<dialect>/001_initial_schema.sql`. Key tables:
+Migrations are managed by [migratus](https://github.com/yogthos/migratus). SQL files live in `resources/migrations/<dialect>/001-initial-schema.up.sql`. Key tables:
 
 | Table | Purpose |
 |---|---|

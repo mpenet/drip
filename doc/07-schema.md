@@ -101,7 +101,7 @@ PostgreSQL uses a `BIT(8)` column and a helper function `drip_job_state_in_bitma
 | `created_at` | timestamptz / DATETIME(6) / TEXT | When the migration was applied |
 | `version` | bigint / BIGINT / INTEGER | Migration version number (unique) |
 
-`migrate!` inserts a row here for each applied version. On subsequent startups, already-applied versions are skipped. Currently only version `1` exists.
+Managed by [migratus](https://github.com/yogthos/migratus). `migrate!` records each applied version here; already-applied versions are skipped on subsequent startups. Currently only version `1` exists.
 
 ## PostgreSQL-specific: LISTEN/NOTIFY
 
@@ -123,15 +123,15 @@ The PostgreSQL migration does not create a trigger. Instead, `insert-job!` calls
 
 ## Migration files
 
-SQL migration files are bundled in the Drip jar:
+SQL migration files (migratus format) are bundled in the Drip jar:
 
 ```
-resources/migrations/mariadb/001_initial_schema.sql
-resources/migrations/postgres/001_initial_schema.sql
-resources/migrations/sqlite/001_initial_schema.sql
+resources/migrations/mariadb/001-initial-schema.up.sql
+resources/migrations/postgres/001-initial-schema.up.sql
+resources/migrations/sqlite/001-initial-schema.up.sql
 ```
 
-`migrate!` reads these from the classpath and applies them in version order. To inspect the exact DDL for your dialect, extract from the jar or browse the source repository.
+`migrate!` delegates to [migratus](https://github.com/yogthos/migratus) and applies pending migrations in version order. The tracking table is named `drip_migration`. To inspect the DDL for your dialect, extract from the jar or browse the source repository.
 
 ## Direct SQL access
 

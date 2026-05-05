@@ -119,21 +119,9 @@
 
 (defrecord PostgresClient [ds]
   client/Migration
-  (migration-table-ddl [_]
-    "CREATE TABLE IF NOT EXISTS drip_migration (
-       line       text        NOT NULL,
-       version    bigint      NOT NULL,
-       created_at timestamptz NOT NULL DEFAULT NOW(),
-       CONSTRAINT line_length CHECK (char_length(line) > 0 AND char_length(line) < 128),
-       CONSTRAINT version_gte_1 CHECK (version >= 1),
-       PRIMARY KEY (line, version)
-     )")
-  (migration-files [_]
-    [[1 "migrations/postgres/001_initial_schema.sql"]])
-  (migration-applied-sql [_]
-    "SELECT version FROM drip_migration WHERE line = 'main'")
-  (migration-record-sql [_]
-    "INSERT INTO drip_migration (line, version) VALUES ('main', ?)")
+  (migration-config [_]
+    {:migration-dir "migrations/postgres"
+     :migration-table-name "drip_migration"})
 
   client/Notifications
   (notify-job-available! [_ queue]

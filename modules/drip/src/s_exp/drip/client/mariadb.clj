@@ -37,19 +37,10 @@
 
 (defrecord MariaDBClient [ds]
   client/Migration
-  (migration-table-ddl [_]
-    "CREATE TABLE IF NOT EXISTS drip_migration (
-       id         BIGINT AUTO_INCREMENT PRIMARY KEY,
-       created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-       version    BIGINT NOT NULL,
-       UNIQUE KEY uq_drip_migration_version (version)
-     ) ENGINE=InnoDB")
-  (migration-files [_]
-    [[1 "migrations/mariadb/001_initial_schema.sql"]])
-  (migration-applied-sql [_]
-    "SELECT version FROM drip_migration")
-  (migration-record-sql [_]
-    "INSERT INTO drip_migration (version) VALUES (?)")
+  (migration-config [_]
+    {:migration-dir "migrations/mariadb"
+     :migration-table-name "drip_migration"
+     :command-separator ";"})
 
   client/Notifications
   (notify-job-available! [_ _queue] nil)

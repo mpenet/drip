@@ -1,7 +1,6 @@
 (ns s-exp.drip.db
-  (:require [clojure.java.io :as io]
-            [clojure.string :as str]
-            [jsonista.core :as json]
+  (:require [jsonista.core :as json]
+            [migratus.core :as migratus]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [s-exp.drip.client :as client]
@@ -144,54 +143,10 @@
 ;; DDL / Migration
 ;; ---------------------------------------------------------------------------
 
-(defn- split-sql-statements
-  "Splits SQL text on ';' boundaries, respecting PostgreSQL $$-quoted blocks.
-   Semicolons inside $$ ... $$ are not treated as statement terminators."
-  [text]
-  (loop [chars (seq text)
-         in-dollar-quote? false
-         current (StringBuilder.)
-         stmts []]
-    (if (empty? chars)
-      (let [s (str/trim (.toString current))]
-        (if (str/blank? s) stmts (conj stmts s)))
-      (let [[c & rest-chars] chars]
-        (cond
-          ;; Detect $$ toggle
-          (and (= c \$) (= (first rest-chars) \$))
-          (recur (next rest-chars)
-                 (not in-dollar-quote?)
-                 (doto current (.append c) (.append \$))
-                 stmts)
-          ;; Statement terminator outside dollar quote
-          (and (= c \;) (not in-dollar-quote?))
-          (let [s (str/trim (.toString current))]
-            (recur rest-chars
-                   false
-                   (StringBuilder.)
-                   (if (str/blank? s) stmts (conj stmts s))))
-          :else
-          (recur rest-chars in-dollar-quote? (doto current (.append c)) stmts))))))
-
-(defn- load-migration-sql
-  "Reads a SQL migration file from the classpath and splits it into
-   individual statements, stripping comments and blank lines."
-  [resource-path]
-  (let [text (slurp (io/resource resource-path))]
-    (->> (split-sql-statements text)
-         (remove #(re-matches #"(?s)(\s*--[^\n]*\n?)*" %)))))
-
 (defn migrate!
   "Runs pending migrations against the datasource. Idempotent - safe to call
    on every application startup. Accepts a Client record (from make-client)."
   [c]
-  (with-tx [tx c]
-    (jdbc/execute! tx [(client/migration-table-ddl c)])
-    (let [applied (into #{}
-                        (map :version)
-                        (jdbc/execute! tx [(client/migration-applied-sql c)] jdbc-opts))]
-      (doseq [[version resource-path] (client/migration-files c)]
-        (when-not (contains? applied version)
-          (doseq [stmt (load-migration-sql resource-path)]
-            (jdbc/execute! tx [stmt]))
-          (jdbc/execute! tx [(client/migration-record-sql c) version]))))))
+  (migratus/migrate (assoc (client/migration-config c)
+                           :store :database
+                           :db {:datasource (:ds c)})))

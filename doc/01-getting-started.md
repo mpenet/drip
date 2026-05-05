@@ -94,9 +94,9 @@ The client record is passed to every Drip function. It holds the datasource and 
 (drip/migrate! client)
 ```
 
-Creates three tables — `drip_job`, `drip_queue`, `drip_migration` — and the indexes needed for efficient fetching. Tracks applied versions in `drip_migration` so it is fully idempotent. Call it on every application startup.
+Creates three tables — `drip_job`, `drip_queue`, `drip_migration` — and the indexes needed for efficient fetching. Managed by [migratus](https://github.com/yogthos/migratus); fully idempotent. Call it on every application startup.
 
-Migration SQL lives in `resources/migrations/<dialect>/001_initial_schema.sql` in the Drip jar. You can inspect it there.
+Migration SQL lives in `resources/migrations/<dialect>/001-initial-schema.up.sql` in the Drip jar. You can inspect it there.
 
 ## Component lifecycle
 

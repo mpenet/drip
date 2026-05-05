@@ -10,15 +10,8 @@
 ;; ---------------------------------------------------------------------------
 
 (defprotocol Migration
-  (migration-table-ddl [client]
-    "Returns DDL string that creates the drip_migration tracking table.")
-  (migration-files [client]
-    "Returns ordered vector of [version resource-path] pairs.")
-  (migration-applied-sql [client]
-    "Returns SQL string to SELECT applied migration versions.
-     Must return rows with a :version column.")
-  (migration-record-sql [client]
-    "Returns parameterized SQL string (with one ? for version) to INSERT a migration record."))
+  (migration-config [client]
+    "Returns a migratus config map (without :store and :db) for this client."))
 
 (defprotocol Notifications
   (notify-job-available! [client queue]

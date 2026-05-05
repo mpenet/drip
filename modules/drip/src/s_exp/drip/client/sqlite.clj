@@ -44,19 +44,10 @@
 
 (defrecord SQLiteClient [ds]
   client/Migration
-  (migration-table-ddl [_]
-    "CREATE TABLE IF NOT EXISTS drip_migration (
-       id         INTEGER PRIMARY KEY AUTOINCREMENT,
-       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-       version    INTEGER NOT NULL,
-       CONSTRAINT uq_drip_migration_version UNIQUE (version)
-     )")
-  (migration-files [_]
-    [[1 "migrations/sqlite/001_initial_schema.sql"]])
-  (migration-applied-sql [_]
-    "SELECT version FROM drip_migration")
-  (migration-record-sql [_]
-    "INSERT INTO drip_migration (version) VALUES (?)")
+  (migration-config [_]
+    {:migration-dir "migrations/sqlite"
+     :migration-table-name "drip_migration"
+     :command-separator ";"})
 
   client/Notifications
   (notify-job-available! [_ _queue] nil)
