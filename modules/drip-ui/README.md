@@ -2,6 +2,8 @@
 
 Web UI for [drip](../drip) — browse and manage jobs and queues in real time.
 
+This is a work in progress.
+
 ## Features
 
 - **Jobs list** — filterable by state, kind, queue, and priority; live auto-refresh via SSE
@@ -59,20 +61,3 @@ java -jar target/drip-ui.jar
 | `DRIP_JDBC_URL` | Yes | JDBC URL for the drip database |
 
 The dialect (PostgreSQL or MariaDB) is inferred from the URL prefix.
-
-## Routes
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/` | Redirect to `/queues` |
-| `GET` | `/queues` | Queue list |
-| `GET` | `/queues/:name` | Queue detail with job counts |
-| `POST` | `/queues/:name/pause` | Pause a queue |
-| `POST` | `/queues/:name/resume` | Resume a queue |
-| `GET` | `/jobs` | Job list (filterable, paginated) |
-| `GET` | `/jobs/stream` | SSE stream for live job list updates |
-| `GET` | `/jobs/:id` | Job detail |
-| `POST` | `/jobs/:id/retry` | Retry a job |
-| `POST` | `/jobs/:id/cancel` | Cancel a job |
-| `POST` | `/jobs/:id/discard` | Discard a job |
-| `POST` | `/jobs/:id/delete` | Delete a job |
