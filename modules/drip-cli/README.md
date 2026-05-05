@@ -4,6 +4,67 @@ A command-line tool for managing [Drip](../../README.md) job queues. Supports Po
 
 **Requires Java 21+.**
 
+<img width="1051" height="495" alt="Screenshot 2026-05-05 at 20 58 26" src="https://github.com/user-attachments/assets/6fb863d4-d09f-47fa-8579-3a5afa287c58" />
+<br/>
+<img width="1046" height="643" alt="Screenshot 2026-05-05 at 20 57 40" src="https://github.com/user-attachments/assets/e4a44be6-6850-4660-8e7c-56894a76ea05" />
+<br/>
+
+```
+drip-cli — Drip job queue management CLI
+
+Usage:
+  drip-cli [global-opts] <command> [command-opts]
+
+Global options:
+  --url <jdbc-url>    JDBC URL (or set DRIP_JDBC_URL env var)
+  --format <fmt>      Output format: table (default) | json
+
+Commands:
+  jobs list           List jobs
+  jobs get            Get a single job by ID (--id <id>)
+  jobs cancel         Cancel a job (--id <id>)
+  jobs retry          Retry a job (--id <id>)
+  jobs discard        Discard a job (--id <id>)
+  jobs delete         Delete a single job (--id <id>)
+  jobs delete-many    Delete multiple jobs by filter (--states <s1,s2>)
+  jobs tui            Interactive TUI browser (--refresh <seconds>, default 5)
+
+  queues list         List queues
+  queues pause        Pause a queue (--name <n>)
+  queues resume       Resume a queue (--name <n>)
+
+  migrate             Run database migrations
+
+jobs list options:
+  --state <s>              Single state filter
+  --states <s1,s2,...>     Multiple states (OR)
+  --kind <k>               Single kind filter
+  --kinds <k1,k2,...>      Multiple kinds (OR)
+  --queue <q>              Single queue filter
+  --queues <q1,q2,...>     Multiple queues (OR)
+  --limit <n>              Max results (default 100)
+  --after <id>             Cursor: return jobs with id < after
+  --created-after <iso>    ISO-8601 instant lower bound on created_at
+  --created-before <iso>   ISO-8601 instant upper bound on created_at
+  --scheduled-after <iso>  ISO-8601 instant lower bound on scheduled_at
+  --scheduled-before <iso> ISO-8601 instant upper bound on scheduled_at
+
+jobs delete-many options:
+  --states <s1,s2,...>     States to delete (required)
+  --kinds <k1,k2,...>
+  --queues <q1,q2,...>
+  --created-before <iso>
+  --finalized-before <iso>
+
+Examples:
+  drip-cli --url 'jdbc:postgresql://localhost/mydb?user=pg&password=pg' jobs list --state failed
+  drip-cli --url 'jdbc:postgresql://localhost/mydb?user=pg&password=pg' jobs tui
+  drip-cli --url 'jdbc:postgresql://localhost/mydb?user=pg&password=pg' jobs retry 42
+  drip-cli --url 'jdbc:postgresql://localhost/mydb?user=pg&password=pg' jobs retry --id 42
+  DRIP_JDBC_URL='jdbc:...' drip-cli jobs list --format json | jq .
+  drip-cli --url 'jdbc:...' migrate
+```
+
 ## Installation
 
 Build an uberjar:
