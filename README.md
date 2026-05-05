@@ -14,22 +14,6 @@ Drip is basically a port of RiverQueue in clojure.
 
 **Requires Java 21+.**
 
-## Why transactional enqueueing?
-
-Most job queues require two separate writes: one to your database, one to the queue. Between them, anything can go wrong — a crash, a network partition, a rollback — leaving your data and your queued work inconsistent.
-
-Drip enqueues jobs in the same transaction as your business logic:
-
-```clojure
-;; Both the order row and the job are committed atomically.
-;; If the transaction rolls back, neither exists.
-(drip/with-tx [tx client]
-  (insert-order! tx order-data)
-  (drip/insert-job! client tx "send_confirmation" {:order-id order-id}))
-```
-
-Jobs are invisible to workers until the transaction commits. No polling delay, no phantom jobs from rolled-back writes. This eliminates a whole class of distributed systems problems without adding any infrastructure.
-
 ## Features
 
 - Transactional job insertion — enqueue inside your own DB transactions
@@ -45,7 +29,21 @@ Jobs are invisible to workers until the transaction commits. No polling delay, n
 
 <p align=center><img width="812" height="530"  alt="Screenshot 2026-05-04 at 20 53 26" src="https://github.com/user-attachments/assets/0a2805ed-bdce-40ca-b02a-debee7a377c5" /></p>
 
+## Why transactional enqueueing?
 
+Most job queues require two separate writes: one to your database, one to the queue. Between them, anything can go wrong — a crash, a network partition, a rollback — leaving your data and your queued work inconsistent.
+
+Drip enqueues jobs in the same transaction as your business logic:
+
+```clojure
+;; Both the order row and the job are committed atomically.
+;; If the transaction rolls back, neither exists.
+(drip/with-tx [tx client]
+  (insert-order! tx order-data)
+  (drip/insert-job! client tx "send_confirmation" {:order-id order-id}))
+```
+
+Jobs are invisible to workers until the transaction commits. No polling delay, no phantom jobs from rolled-back writes. This eliminates a whole class of distributed systems problems without adding any infrastructure.
 
 ## Why a database-backed queue?
 
