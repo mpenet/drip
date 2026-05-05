@@ -1,0 +1,15 @@
+{:paths ["src"]
+ :deps {org.clojure/clojure {:mvn/version "1.12.0"}
+        com.s-exp/drip {:local/root "../drip"}
+        de.timokramer/charm.clj {:mvn/version "0.2.71"}
+        org.clojure/core.async {:mvn/version "1.8.741"}
+        com.zaxxer/HikariCP {:mvn/version "5.1.0"}
+        metosin/jsonista {:mvn/version "0.3.8"}
+        org.postgresql/postgresql {:mvn/version "42.7.3"}
+        org.mariadb.jdbc/mariadb-java-client {:mvn/version "3.4.1"}
+        org.xerial/sqlite-jdbc {:mvn/version "3.45.3.0"}
+        org.slf4j/slf4j-nop {:mvn/version "2.0.17"}}
+ :aliases
+ {:build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.5"}}
+          :ns-default build}
+  :run {:main-opts ["-m" "s-exp.drip-cli"]}}}

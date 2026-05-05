@@ -14,6 +14,8 @@
            (org.postgresql PGConnection)
            (org.postgresql.copy CopyManager)))
 
+(set! *warn-on-reflection* true)
+
 ;; ---------------------------------------------------------------------------
 ;; LISTEN/NOTIFY
 ;; ---------------------------------------------------------------------------

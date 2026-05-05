@@ -7,6 +7,8 @@
             [s-exp.duration :as duration])
   (:import (java.time Instant)))
 
+(set! *warn-on-reflection* true)
+
 (defn- in-clause [ids]
   [(str "(" (str/join "," (repeat (count ids) "?")) ")")
    ids])
