@@ -14,7 +14,7 @@ CREATE TYPE drip_job_state AS ENUM(
   'running',
   'scheduled'
 );
-
+--;;
 CREATE TABLE IF NOT EXISTS drip_queue (
     name       text         NOT NULL PRIMARY KEY,
     created_at timestamptz  NOT NULL DEFAULT NOW(),
@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS drip_queue (
     updated_at timestamptz  NOT NULL DEFAULT NOW(),
     CONSTRAINT name_length CHECK (char_length(name) > 0 AND char_length(name) < 128)
 );
-
+--;;
 CREATE TABLE IF NOT EXISTS drip_job (
     id           bigint          GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     state        drip_job_state  NOT NULL DEFAULT 'available',
@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS drip_job (
     CONSTRAINT queue_length CHECK (char_length(queue) > 0 AND char_length(queue) < 128),
     CONSTRAINT kind_length CHECK (char_length(kind) > 0 AND char_length(kind) < 128)
 );
-
+--;;
 -- Bitmask helper: checks if a state is active in the unique_states bitmask.
 -- River bit layout (MSB=7 to LSB=0):
 --   bit7=available, bit6=cancelled, bit5=completed, bit4=discarded,
@@ -74,24 +74,24 @@ AS $$
         ELSE 0
     END = 1;
 $$;
-
+--;;
 -- Primary fetch index: River order (state, queue, priority, scheduled_at, id)
 CREATE INDEX IF NOT EXISTS drip_job_prioritized_fetching_index
     ON drip_job USING btree (state, queue, priority, scheduled_at, id);
-
+--;;
 CREATE INDEX IF NOT EXISTS drip_job_kind
     ON drip_job USING btree (kind);
-
+--;;
 CREATE INDEX IF NOT EXISTS drip_job_state_and_finalized_at_index
     ON drip_job USING btree (state, finalized_at)
     WHERE finalized_at IS NOT NULL;
-
+--;;
 CREATE INDEX IF NOT EXISTS drip_job_args_index
     ON drip_job USING GIN (args);
-
+--;;
 CREATE INDEX IF NOT EXISTS drip_job_metadata_index
     ON drip_job USING GIN (metadata);
-
+--;;
 -- Partial unique index: only enforces uniqueness for states active in the bitmask.
 CREATE UNIQUE INDEX IF NOT EXISTS drip_job_unique_idx
     ON drip_job (unique_key)

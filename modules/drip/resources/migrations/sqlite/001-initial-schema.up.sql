@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS drip_queue (
     paused_at  TEXT    NULL,
     updated_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
-
+--;;
 -- Job states: available, cancelled, completed, discarded,
 --             pending, retryable, running, scheduled
 -- Priority: 1 (highest) to 4 (lowest)
@@ -44,11 +44,11 @@ CREATE TABLE IF NOT EXISTS drip_job (
     CONSTRAINT chk_drip_job_priority
         CHECK (priority BETWEEN 1 AND 4)
 );
-
+--;;
 -- Primary fetch index: queue + state + priority + scheduled_at
 CREATE INDEX IF NOT EXISTS idx_drip_job_fetch
     ON drip_job (queue, state, priority, scheduled_at);
-
+--;;
 -- Unique job deduplication index.
 -- NULL unique_key rows are exempt (SQLite NULL != NULL in UNIQUE indexes).
 CREATE UNIQUE INDEX IF NOT EXISTS uq_drip_job_unique_key

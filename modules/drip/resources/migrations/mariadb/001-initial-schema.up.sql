@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS drip_queue (
     paused_at  DATETIME(6)  NULL,
     updated_at DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
 ) ENGINE=InnoDB;
-
+--;;
 -- Job states: available, cancelled, completed, discarded,
 --             pending, retryable, running, scheduled
 -- Priority: 1 (highest) to 4 (lowest)
@@ -45,13 +45,13 @@ CREATE TABLE IF NOT EXISTS drip_job (
     CONSTRAINT chk_drip_job_priority
         CHECK (priority BETWEEN 1 AND 4)
 ) ENGINE=InnoDB;
-
+--;;
 -- Primary fetch index: queue + state + priority + scheduled_at
 -- Used by: SELECT ... WHERE queue=? AND state='available' AND scheduled_at<=?
 --          ORDER BY priority ASC, scheduled_at ASC ... FOR UPDATE SKIP LOCKED
 CREATE INDEX IF NOT EXISTS idx_drip_job_fetch
     ON drip_job (queue, state, priority, scheduled_at);
-
+--;;
 -- Unique job deduplication index.
 -- NULL unique_key rows are exempt (NULL != NULL in SQL UNIQUE constraints),
 -- so non-unique jobs coexist freely.

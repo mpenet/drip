@@ -46,8 +46,7 @@
   client/Migration
   (migration-config [_]
     {:migration-dir "migrations/sqlite"
-     :migration-table-name "drip_migration"
-     :command-separator ";"})
+     :migration-table-name "drip_migration"})
 
   client/Notifications
   (notify-job-available! [_ _queue] nil)
