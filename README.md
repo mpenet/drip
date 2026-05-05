@@ -26,6 +26,7 @@ Drip is basically a port of RiverQueue in clojure.
 - Outbox pattern — complete jobs atomically with your own business writes
 - Virtual threads (Java 21+)
 - [Web UI](modules/drip-ui) — browse and manage jobs and queues in real time
+- [CLI](modules/drip-cli) — command-line tool and interactive TUI for job management
 
 <p align=center><img width="812" height="530"  alt="Screenshot 2026-05-04 at 20 53 26" src="https://github.com/user-attachments/assets/0a2805ed-bdce-40ca-b02a-debee7a377c5" /></p>
 
@@ -499,6 +500,23 @@ Migrations are managed by [migratus](https://github.com/yogthos/migratus). SQL f
 
 
 See [modules/drip-ui/README.md](modules/drip-ui/README.md) for full details.
+
+## CLI
+
+[drip-cli](modules/drip-cli) is a command-line tool for managing jobs and queues from the terminal. Supports PostgreSQL, MariaDB, and SQLite. Includes an interactive TUI browser with auto-refresh, job detail view, and keyboard navigation.
+
+```bash
+# List failed jobs
+drip-cli --url 'jdbc:postgresql://localhost/mydb?user=pg&password=pg' jobs list --state failed
+
+# Interactive TUI
+drip-cli --url '...' jobs tui
+
+# JSON output for scripting
+drip-cli --url '...' jobs list --format json | jq '.[].id'
+```
+
+See [modules/drip-cli/README.md](modules/drip-cli/README.md) for full details.
 
 ## License
 
