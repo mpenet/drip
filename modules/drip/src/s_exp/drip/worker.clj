@@ -2,7 +2,8 @@
   (:require [clojure.tools.logging :as log]
             [s-exp.drip.client :as client]
             [s-exp.drip.db :as db]
-            [s-exp.drip.job :as job])
+            [s-exp.drip.job :as job]
+            [s-exp.duration :as duration])
   (:import (java.time Instant)
            (java.util.concurrent ExecutionException Executors ExecutorService
                                  Future ScheduledExecutorService Semaphore
@@ -30,25 +31,26 @@
     (worker client job)))
 
 (defn- process-job
-  [c registry retry-policies job-timeouts job default-retry-policy timeout-ms
-   ^ExecutorService task-executor ^Semaphore semaphore]
+  [{:keys [client registry retry-policies job-timeouts
+           ^ExecutorService task-executor ^Semaphore semaphore]} job]
   (try
     (let [worker (get registry (:kind job))]
       (if-not worker
-        (db/with-tx [tx c]
-          (client/discard-job! c tx (:id job)))
-        (let [[ok? result-or-ex]
+        (db/with-tx [tx client]
+          (client/discard-job! client tx (:id job)))
+        (let [timeout-ms (get job-timeouts (:kind job) (get job-timeouts :default))
+              [ok? result-or-ex]
               (try
-                [true (run-with-timeout task-executor worker c job (get job-timeouts (:kind job) timeout-ms))]
+                [true (run-with-timeout task-executor worker client job timeout-ms)]
                 (catch Throwable t
                   [false t]))]
           (if ok?
             nil
             (let [^Throwable t result-or-ex
-                  policy (get retry-policies (:kind job) default-retry-policy)]
-              (db/with-tx [tx c]
+                  policy (get retry-policies (:kind job) (get retry-policies :default))]
+              (db/with-tx [tx client]
                 (client/fail-job!
-                 c
+                 client
                  tx
                  (:id job)
                  {:error (or (.getMessage t) (str (class t)))
@@ -61,15 +63,15 @@
       (.release semaphore))))
 
 (defn- poll-queue
-  [c registry retry-policies job-timeouts timeout-ms q worker-id concurrency
-   retry-policy ^ExecutorService task-executor ^Semaphore semaphore]
+  [{:keys [client registry retry-policies job-timeouts worker-id concurrency
+           ^ExecutorService task-executor ^Semaphore semaphore] :as ctx} q]
   (let [available (.availablePermits semaphore)
         limit (min concurrency available)]
     (when (pos? limit)
       (.acquire semaphore (int limit))
-      (let [jobs (db/with-tx [tx c]
-                   (when-not (client/queue-paused? c tx q)
-                     (client/fetch-jobs! c tx q worker-id {:limit limit})))]
+      (let [jobs (db/with-tx [tx client]
+                   (when-not (client/queue-paused? client tx q)
+                     (client/fetch-jobs! client tx q worker-id {:limit limit})))]
         (if (seq jobs)
           (do
             (when (< (count jobs) limit)
@@ -77,9 +79,7 @@
             (doseq [job jobs]
               (.submit task-executor
                        ^Runnable (fn []
-                                   (process-job c registry retry-policies job-timeouts
-                                                job retry-policy timeout-ms
-                                                task-executor semaphore)))))
+                                   (process-job ctx job)))))
           (.release semaphore (int limit)))))))
 
 (def default-retention-ms
@@ -88,44 +88,53 @@
    :discarded 604800000})
 
 (defn- run-cleaner
-  [c tx retention]
-  (let [now (Instant/now)]
-    (doseq [[state ms] retention]
-      (when ms
-        (client/delete-jobs! c
-                             tx
-                             {:states [state]
-                              :finalized-before (.minusMillis now (long ms))})))))
+  [c tx retention consumed-queues]
+  (let [now (Instant/now)
+        global (get retention :default)
+        per-queue (dissoc retention :default)
+        delete! (fn [states-ms qs]
+                  (doseq [[state ms] states-ms]
+                    (when ms
+                      (client/delete-jobs! c tx
+                                           (cond-> {:states [state]
+                                                    :finalized-before (.minusMillis now (long ms))}
+                                             (seq qs) (assoc :queues (vec qs)))))))]
+    (doseq [[q-name q-retention] per-queue]
+      (delete! (merge global q-retention) [q-name]))
+    (when (seq global)
+      (let [overridden (set (keys per-queue))
+            global-qs (seq (remove overridden consumed-queues))]
+        (when (or (empty? overridden) (seq global-qs))
+          (delete! global global-qs))))))
 
 (defn- do-poll
-  [c registry retry-policies job-timeouts timeout-ms queues worker-id
-   concurrency retry-policy rescue-after retention task-executor
-   semaphore]
+  [{:keys [client retry-policies queues rescue-after retention] :as ctx}]
   (try
-    (db/with-tx [tx c]
-      (client/promote-scheduled-jobs! c tx)
+    (db/with-tx [tx client]
+      (client/promote-scheduled-jobs! client tx)
       (when rescue-after
-        (client/rescue-stuck-jobs! c
-                                   tx
-                                   (.minusMillis ^Instant (Instant/now)
-                                                 (long rescue-after))
-                                   retry-policy))
+        (let [now (Instant/now)
+              default-dur (get rescue-after :default)
+              per-queue (dissoc rescue-after :default)
+              rescue! (fn [dur qs]
+                        (when dur
+                          (client/rescue-stuck-jobs! client tx
+                                                     (.minusMillis now (long (duration/duration dur)))
+                                                     (get retry-policies :default)
+                                                     qs)))]
+          (doseq [[q-name q-dur] per-queue]
+            (rescue! q-dur [q-name]))
+          (when default-dur
+            (let [overridden (set (keys per-queue))
+                  global-qs (seq (remove overridden queues))]
+              (when (or (empty? overridden) (seq global-qs))
+                (rescue! default-dur global-qs))))))
       (when retention
-        (run-cleaner c tx retention)))
+        (run-cleaner client tx retention queues)))
     (catch Exception t (log/error t "drip: poll maintenance error")))
   (doseq [q queues]
     (try
-      (poll-queue c
-                  registry
-                  retry-policies
-                  job-timeouts
-                  timeout-ms
-                  q
-                  worker-id
-                  concurrency
-                  retry-policy
-                  task-executor
-                  semaphore)
+      (poll-queue ctx q)
       (catch Exception t (log/error t "drip: poll-queue error" {:queue q})))))
 
 ;; ---------------------------------------------------------------------------
@@ -137,13 +146,11 @@
             registry
             retry-policies
             job-timeouts
-            timeout-ms
             queues
             concurrency
             poll-interval-ms
             worker-id
-            retry-policy
-            rescue-after-ms
+            rescue-after
             retention
             ^ExecutorService task-executor
             ^ScheduledExecutorService scheduler
@@ -173,42 +180,69 @@
      :concurrency       - max simultaneous in-flight jobs across all queues (default 10)
      :poll-interval-ms  - polling interval in milliseconds (default 1000)
      :worker-id         - unique string ID (default random UUID)
-     :retry-policy      - default retry policy fn: (fn [attempt] java.time.Instant) (default exponential backoff)
-     :retry-policies    - {kind-string retry-policy-fn} map for per-kind overrides (default {})
-     :timeout-ms        - global job execution timeout in ms; nil = no timeout (default nil)
-     :job-timeouts      - {kind-string timeout-ms} map for per-kind overrides (default {})
-     :rescue-after-ms   - rescue jobs stuck in :running longer than this many ms (default 3600000 = 1h)
-                          Set to nil to disable rescue.
-     :retention         - map of state keyword → retention-ms; jobs finalized longer ago are deleted.
-                          Defaults to {:completed 86400000 :cancelled 86400000 :discarded 604800000}.
-                          Set to nil to disable automatic cleanup.
+     :retry-policies    - {kind-string retry-policy-fn, :default retry-policy-fn} map.
+                          :default is the fallback policy (default: exponential backoff).
+                          kind-string entries override :default for that job kind.
+                          Policy fn: (fn [attempt] java.time.Instant)
+                          Example: {:default drip/default-retry-policy
+                                    \"email\" fast-retry-policy}
+     :job-timeouts      - unified timeout config map. :default is the global timeout in ms
+                          (nil = no timeout); kind-string keys override per kind.
+                          Default: {:default nil} (no timeout).
+                          Example: {:default 30000
+                                    \"slow_report\" 120000
+                                    \"quick_notify\" 5000}
+     :rescue-after      - unified rescue config map. :default is the global stuck threshold;
+                          queue-name string keys override per queue. Each value is a duration:
+                          ms number or duration string (e.g. \"1h\", \"30m\").
+                          Set :default to nil to disable global rescue. Set :rescue-after nil
+                          to disable rescue entirely.
+                          Default: {:default \"1h\"}
+                          Example: {:default \"1h\" \"slow\" \"4h\" \"fast\" \"15m\"}
+     :retention         - unified retention config map. Keys are either :default (the global
+                          {state → ms} map) or queue-name strings (per-queue {state → ms} overrides).
+                          Per-queue entries are merged on top of :default for that queue.
+                          Set a state to nil to disable cleanup for it. Set :retention nil to
+                          disable all automatic cleanup.
+                          Default: {:default {:completed 86400000
+                                              :cancelled 86400000
+                                              :discarded 604800000}}
+                          Example: {:default  {:completed 86400000 :discarded 604800000}
+                                    \"fast\"    {:completed 3600000}
+                                    \"archive\" {:discarded nil}}
 
    On PostgreSQL, a LISTEN connection is started automatically; inserts from
    other processes trigger an immediate poll instead of waiting for the interval.
 
    Returns an Executor record. Stop with stop-executor!."
-  [{:keys [client registry retry-policies job-timeouts timeout-ms queues
-           concurrency poll-interval-ms worker-id retry-policy rescue-after-ms
-           retention]
+  [{:keys [client registry retry-policies job-timeouts queues
+           concurrency poll-interval-ms worker-id rescue-after retention]
     :or {queues ["default"]
          concurrency 10
          poll-interval-ms 1000
-         retry-policy job/default-retry-policy
-         retry-policies {}
-         job-timeouts {}
-         rescue-after-ms 3600000
-         retention default-retention-ms}}]
+         retry-policies {:default job/default-retry-policy}
+         job-timeouts {:default nil}
+         rescue-after {:default "1h"}
+         retention {:default default-retention-ms}}}]
   (let [worker-id (or worker-id (str (random-uuid)))
         task-executor (make-task-executor concurrency)
         scheduler (Executors/newSingleThreadScheduledExecutor)
         semaphore (Semaphore. (int concurrency))
         running? (atom true)
+        ctx {:client client
+             :registry registry
+             :retry-policies retry-policies
+             :job-timeouts job-timeouts
+             :queues queues
+             :worker-id worker-id
+             :concurrency concurrency
+             :rescue-after rescue-after
+             :retention retention
+             :task-executor task-executor
+             :semaphore semaphore}
         poll-fn (fn []
                   (when @running?
-                    (do-poll client registry retry-policies job-timeouts
-                             timeout-ms queues worker-id concurrency
-                             retry-policy rescue-after-ms retention
-                             task-executor semaphore)))
+                    (do-poll ctx)))
         listener (client/start-listener! client
                                          (fn [_queue]
                                            (when @running?
@@ -224,13 +258,11 @@
       :registry registry
       :retry-policies retry-policies
       :job-timeouts job-timeouts
-      :timeout-ms timeout-ms
       :queues queues
       :concurrency concurrency
       :poll-interval-ms poll-interval-ms
       :worker-id worker-id
-      :retry-policy retry-policy
-      :rescue-after-ms rescue-after-ms
+      :rescue-after rescue-after
       :retention retention
       :task-executor task-executor
       :scheduler scheduler

@@ -270,15 +270,16 @@
                    (encode-ts (Instant/now))])]
       (:next.jdbc/update-count result 0)))
 
-  (rescue-stuck-jobs! [_ tx stuck-after retry-policy]
+  (rescue-stuck-jobs! [_ tx stuck-after retry-policy queues]
     (let [now (Instant/now)
-          stuck (jdbc/execute!
-                 tx
-                 ["SELECT id, attempt, max_attempts FROM drip_job
-                    WHERE state = 'running'
-                      AND attempted_at <= ?"
-                  (encode-ts stuck-after)]
-                 db/jdbc-opts)
+          queue-names (when (seq queues) (vec queues))
+          sql (cond-> "SELECT id, attempt, max_attempts FROM drip_job
+                        WHERE state = 'running'
+                          AND attempted_at <= ?"
+                (seq queue-names) (str " AND queue IN " (first (in-clause queue-names))))
+          params (cond-> [(encode-ts stuck-after)]
+                   (seq queue-names) (into queue-names))
+          stuck (jdbc/execute! tx (into [sql] params) db/jdbc-opts)
           error-entry {:error "job rescued after timeout" :at (str now)}]
       (reduce
        (fn [^long n row]

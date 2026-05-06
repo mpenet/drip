@@ -48,9 +48,10 @@
   (promote-scheduled-jobs! [client tx]
     "Moves :scheduled/:retryable jobs whose scheduled_at <= now to :available.
      Returns count of promoted jobs.")
-  (rescue-stuck-jobs! [client tx stuck-after retry-policy]
+  (rescue-stuck-jobs! [client tx stuck-after retry-policy queues]
     "Moves :running jobs with attempted_at <= stuck-after to :retryable or :discarded.
-     Appends a rescue error entry to each job. Returns count of rescued jobs.")
+     Appends a rescue error entry to each job. Returns count of rescued jobs.
+     queues - optional seq of queue names to restrict rescue to; nil = all queues.")
   (delete-jobs! [client tx opts]
     "Deletes jobs matching opts. Returns count of deleted jobs.
      opts keys:

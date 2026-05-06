@@ -53,18 +53,20 @@ A handler is a plain function of two arguments: `[client job]`.
    :worker-id        "worker-1"   ; unique ID for this executor (default random UUID)
 
    ;; Retries
-   :retry-policy     my-policy    ; default retry fn for all kinds
-   :retry-policies   {"slow_job" lenient-policy}  ; per-kind overrides
+   :retry-policies   {:default  my-policy        ; :default = fallback policy for all kinds
+                      "slow_job" lenient-policy}  ; per-kind overrides
 
    ;; Timeouts
-   :timeout-ms       nil          ; global job timeout in ms; nil = no limit
-   :job-timeouts     {"slow_job" 120000}  ; per-kind overrides (ms)
+   :job-timeouts     {:default  nil        ; global timeout in ms; nil = no limit
+                      "slow_job" 120000}  ; per-kind override (ms)
 
    ;; Maintenance
-   :rescue-after-ms  3600000      ; rescue :running jobs older than this (default 1h); nil = disable
-   :retention        {:completed 86400000     ; 1 day
-                      :cancelled 86400000     ; 1 day
-                      :discarded 604800000}}) ; 7 days
+   :rescue-after     {:default "1h"  ; :default = global threshold (duration string or ms)
+                      "slow" "4h"}  ; per-queue overrides; nil = disable rescue
+   :retention        {:default  {:completed 86400000    ; 1 day
+                                 :cancelled 86400000    ; 1 day
+                                 :discarded 604800000}  ; 7 days
+                      "fast"    {:completed 3600000}}}) ; per-queue override
 ```
 
 ## Stopping the executor
@@ -89,7 +91,7 @@ Interrupts all in-flight virtual threads immediately:
 (drip/stop-and-cancel! executor)
 ```
 
-In-flight jobs remain in `:running` state. On the next executor startup (or if another executor is running), `rescue-stuck-jobs!` will requeue them based on `:rescue-after-ms`.
+In-flight jobs remain in `:running` state. On the next executor startup (or if another executor is running), `rescue-stuck-jobs!` will requeue them based on `:rescue-after`.
 
 Use this for fast deploys where you can afford jobs to re-run.
 
@@ -173,14 +175,14 @@ Any function `(fn [attempt] java.time.Instant)` works as a policy:
 
 ### Per-kind policies
 
-Use `:retry-policies` to override for specific job kinds:
+Use `:retry-policies` with a `:default` key for the global policy and kind-string keys for per-kind overrides:
 
 ```clojure
 (drip/start-executor!
   {:client         client
    :registry       registry
-   :retry-policy   (drip/exponential-retry-policy "5s" :multiplier 2.0 :max "1h")
-   :retry-policies {"fast_fail" (drip/constant-retry-policy "2s")
+   :retry-policies {:default   (drip/exponential-retry-policy "5s" :multiplier 2.0 :max "1h")
+                    "fast_fail" (drip/constant-retry-policy "2s")
                     "slow_job"  (drip/linear-retry-policy "1m" :max "1h")}})
 ```
 
@@ -192,27 +194,41 @@ Limit how long a single job can run. When exceeded, the job thread is interrupte
 (drip/start-executor!
   {:client     client
    :registry   registry
-   :timeout-ms 30000          ; 30s for all jobs (nil = no timeout)
-   :job-timeouts
-   {"slow_report"  120000     ; 2 minutes for this kind
-    "quick_notify" 5000}})    ; 5 seconds for this kind
+   :job-timeouts {:default       30000   ; 30s for all jobs (nil = no timeout)
+                  "slow_report"  120000  ; 2 minutes for this kind
+                  "quick_notify" 5000}}) ; 5 seconds for this kind
 ```
 
-Per-kind `:job-timeouts` takes precedence over `:timeout-ms`. If a kind is not in `:job-timeouts`, `:timeout-ms` is used. If both are nil, there is no timeout.
+`:default` is the global timeout applied to any kind not listed explicitly. If `:default` is nil (or absent), there is no global timeout. Per-kind entries override `:default` for that kind.
 
 ## Retention and cleanup
 
-The executor automatically deletes old finalized jobs on each poll cycle. Configure per-state retention in milliseconds:
+The executor automatically deletes old finalized jobs on each poll cycle. `:retention` is a unified map: the `:default` key holds the global `{state → ms}` windows, and queue-name string keys hold per-queue overrides merged on top of `:default`.
 
 ```clojure
-{:retention {:completed 86400000     ; delete completed jobs after 1 day
-             :cancelled 86400000     ; delete cancelled jobs after 1 day
-             :discarded 604800000}}  ; delete discarded jobs after 7 days
+{:retention {:default  {:completed 86400000     ; delete completed jobs after 1 day
+                        :cancelled 86400000     ; delete cancelled jobs after 1 day
+                        :discarded 604800000}}} ; delete discarded jobs after 7 days
 ```
 
 Set a state to `nil` to disable cleanup for it. Set `:retention nil` to disable all automatic cleanup.
 
-Default: completed and cancelled → 1 day, discarded → 7 days.
+Default: `{:default {:completed 86400000 :cancelled 86400000 :discarded 604800000}}`.
+
+### Per-queue retention
+
+Add queue-name string keys to `:retention`. Each entry is merged on top of `:default` for that queue — only override the states that differ:
+
+```clojure
+{:retention {:default  {:completed 86400000       ; global: 1 day
+                        :discarded 604800000}      ; global: 7 days
+             "fast"    {:completed 3600000}        ; fast queue: 1h completed
+             "archive" {:discarded nil}            ; archive queue: never delete discarded
+             "critical" {:completed 2592000000     ; critical queue: 30 days completed
+                         :discarded 2592000000}}}  ; critical queue: 30 days discarded
+```
+
+Queues not listed use `:default`. Setting a state to `nil` in a queue entry disables cleanup for that state on that queue only.
 
 ## PostgreSQL LISTEN/NOTIFY
 

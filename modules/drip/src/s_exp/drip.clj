@@ -301,16 +301,22 @@
 (defn rescue-stuck-jobs
   "Rescues jobs stuck in :running state with attempted_at <= stuck-after.
    Transitions each to :retryable or :discarded (based on attempt vs max-attempts).
-   Uses the client's own datasource. Returns count of rescued jobs."
-  [client stuck-after retry-policy]
-  (with-tx [tx client]
-    (client/rescue-stuck-jobs! client tx stuck-after retry-policy)))
+   Uses the client's own datasource. Returns count of rescued jobs.
+   queues - optional seq of queue names to restrict rescue to; nil = all queues."
+  ([client stuck-after retry-policy]
+   (rescue-stuck-jobs client stuck-after retry-policy nil))
+  ([client stuck-after retry-policy queues]
+   (with-tx [tx client]
+     (client/rescue-stuck-jobs! client tx stuck-after retry-policy queues))))
 
 (defn rescue-stuck-jobs!
   "Rescues jobs stuck in :running state with attempted_at <= stuck-after.
-   Uses the supplied tx. Returns count of rescued jobs."
-  [client tx stuck-after retry-policy]
-  (client/rescue-stuck-jobs! client tx stuck-after retry-policy))
+   Uses the supplied tx. Returns count of rescued jobs.
+   queues - optional seq of queue names to restrict rescue to; nil = all queues."
+  ([client tx stuck-after retry-policy]
+   (client/rescue-stuck-jobs! client tx stuck-after retry-policy nil))
+  ([client tx stuck-after retry-policy queues]
+   (client/rescue-stuck-jobs! client tx stuck-after retry-policy queues)))
 
 (defn delete-jobs
   "Deletes jobs matching opts. Uses the client's own datasource.
@@ -390,7 +396,14 @@
 
    Registry handlers receive [client job] as two arguments.
    Handlers must explicitly call complete-job!, snooze-job!, etc. to manage job state.
-   Throwing any Throwable signals failure and triggers retry or discard."
+   Throwing any Throwable signals failure and triggers retry or discard.
+
+   Key options:
+     :retry-policies - {:default policy-fn, \"kind\" policy-fn} unified retry map
+     :job-timeouts   - {:default timeout-ms, \"kind\" timeout-ms} unified timeout map (nil = no timeout)
+     :rescue-after   - {:default duration, \"queue\" duration} unified rescue map (nil or :default nil = disable)
+     :retention      - {:default {state → ms}, \"queue\" {state → ms}} unified retention map
+                       Set :retention nil to disable all cleanup."
   [opts]
   (worker/start-executor! opts))
 

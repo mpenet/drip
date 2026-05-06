@@ -300,14 +300,17 @@ Persist a handler's result into the job's `metadata` column under the `"output"`
    :concurrency      10             ; max simultaneous in-flight jobs (default 10)
    :poll-interval-ms 1000           ; polling interval in ms (default 1000)
    :worker-id        "my-worker-1"  ; unique ID (default: random UUID)
-   :retry-policy     my-policy      ; default: exponential backoff (attempt^4 ± 10%)
-   :retry-policies   {"my_kind" fast-retry-policy}  ; per-kind overrides
-   :timeout-ms       30000          ; global job timeout in ms; nil = no timeout
-   :job-timeouts     {"slow_job" 120000}             ; per-kind overrides
-   :rescue-after-ms  3600000        ; rescue jobs stuck in :running > 1h (default 1h)
-   :retention        {:completed 86400000            ; delete finalized jobs older than
-                      :cancelled 86400000            ;   these ms values (default shown)
-                      :discarded 604800000}})        ; nil = disable cleanup
+   :retry-policies   {:default  my-policy              ; default: exponential backoff (attempt^4 ± 10%)
+                      "my_kind" fast-retry-policy}    ; per-kind overrides
+   :job-timeouts     {:default  30000                 ; :default = global timeout; nil = no timeout
+                      "slow_job" 120000}             ; per-kind overrides
+   :rescue-after     {:default "1h"  ; :default = global threshold (duration string or ms)
+                      "slow" "4h"}  ; per-queue overrides; nil = disable rescue
+   :retention        {:default  {:completed 86400000  ; :default = global retention windows
+                                 :cancelled 86400000  ;   (nil = disable cleanup)
+                                 :discarded 604800000}
+                      "fast"    {:completed 3600000}  ; per-queue overrides merged with :default
+                      "archive" {:discarded nil}}})
 ```
 
 On PostgreSQL, a `LISTEN` connection starts automatically. Inserts in other processes trigger an immediate poll.
@@ -344,15 +347,15 @@ drip/default-retry-policy
   (.plusSeconds (Instant/now) (* 30 attempt)))
 ```
 
-Use per-kind overrides via `:retry-policies` in `start-executor!`:
+Use `:retry-policies` with a `:default` key and per-kind overrides:
 
 ```clojure
 (drip/start-executor!
   {:client  client
    :registry {"slow_job" slow-handler
               "fast_job" fast-handler}
-   :retry-policy  (drip/exponential-retry-policy "5s" :multiplier 2.0 :max "1h")
-   :retry-policies {"fast_job" (drip/constant-retry-policy "2s")}})
+   :retry-policies {:default  (drip/exponential-retry-policy "5s" :multiplier 2.0 :max "1h")
+                    "fast_job" (drip/constant-retry-policy "2s")}})
 ```
 
 ### Queue management

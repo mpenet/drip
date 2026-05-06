@@ -224,15 +224,34 @@
       (is (pos? n))
       (is (= :retryable (:state (drip/get-job *client* (:id j))))))))
 
+(deftest rescue-stuck-jobs-queue-filter
+  (testing "rescue-stuck-jobs with queues filter only rescues matching queue"
+    (let [j-a (drip/insert-job *client* "k" {} {:max-attempts 3 :queue "rescue-queue-a"})
+          j-b (drip/insert-job *client* "k" {} {:max-attempts 3 :queue "rescue-queue-b"})
+          _ (drip/fetch-jobs *client* "rescue-queue-a" "w" :limit 1)
+          _ (drip/fetch-jobs *client* "rescue-queue-b" "w" :limit 1)
+          stuck-at (.minusSeconds (Instant/now) 7200)
+          _ (drip/with-tx [tx *client*]
+              (jdbc/execute-one! tx
+                                 ["UPDATE drip_job SET attempted_at = ? WHERE id IN (?, ?)"
+                                  (db/instant->ts stuck-at) (:id j-a) (:id j-b)]))]
+      ;; rescue only queue-a
+      (drip/rescue-stuck-jobs *client* (.minusSeconds (Instant/now) 3600)
+                              job/default-retry-policy ["rescue-queue-a"])
+      (is (= :retryable (:state (drip/get-job *client* (:id j-a)))))
+      (is (= :running (:state (drip/get-job *client* (:id j-b))))))))
+
 (deftest per-kind-retry-policy-test
-  (testing ":retry-policies map is stored in executor record"
+  (testing ":retry-policies unified map is stored in executor record"
     (let [custom-policy (fn [_attempt] (.plusSeconds (Instant/now) 1))
           ex (drip/start-executor!
               {:client *client*
                :registry {}
-               :retry-policies {"my_kind" custom-policy}
+               :retry-policies {:default drip/default-retry-policy
+                                "my_kind" custom-policy}
                :poll-interval-ms 999999})]
       (is (= custom-policy (get (:retry-policies ex) "my_kind")))
+      (is (= drip/default-retry-policy (get (:retry-policies ex) :default)))
       (drip/stop-executor! ex 1000))))
 
 (deftest job-timeout-test
@@ -244,7 +263,7 @@
           ex (worker/start-executor!
               {:client *client*
                :registry registry
-               :timeout-ms 200
+               :job-timeouts {:default 200}
                :poll-interval-ms 50})]
       (try
         (drip/insert-job *client* "timeout_kind" {} nil)
@@ -264,6 +283,17 @@
                :job-timeouts {"slow_kind" 500}
                :poll-interval-ms 999999})]
       (is (= 500 (get (:job-timeouts ex) "slow_kind")))
+      (drip/stop-executor! ex 1000))))
+
+(deftest rescue-after-unified-map-test
+  (testing ":rescue-after unified map stored in executor record"
+    (let [ex (drip/start-executor!
+              {:client *client*
+               :registry {}
+               :rescue-after {:default "2h" "slow" "4h"}
+               :poll-interval-ms 999999})]
+      (is (= "2h" (get (:rescue-after ex) :default)))
+      (is (= "4h" (get (:rescue-after ex) "slow")))
       (drip/stop-executor! ex 1000))))
 
 (deftest handler-receives-client-and-job
