@@ -222,7 +222,8 @@ Each function has two variants: one that opens its own transaction (no `!` suffi
   :max-attempts 5
   :scheduled-at (-> (Instant/now) (.plusSeconds 3600))
   :tags ["important"]
-  :metadata {:source "api"})
+  :metadata {:source "api"}
+  :ephemeral true)   ; delete row immediately on success (no :completed record retained)
 
 ;; With an explicit transaction (atomic with your own writes)
 (drip/with-tx [tx client]
@@ -231,7 +232,7 @@ Each function has two variants: one that opens its own transaction (no `!` suffi
     :queue "default"))
 ```
 
-Default insert opts: `queue="default"`, `priority=1`, `max-attempts=25`.
+Default insert opts: `queue="default"`, `priority=1`, `max-attempts=25`, `ephemeral=false`.
 
 ### Unique jobs
 

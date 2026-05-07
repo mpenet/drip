@@ -35,7 +35,8 @@
      :state (keyword (:state row))
      :tags (db/<-json (:tags row))
      :unique-key (:unique-key row)
-     :unique-states (:unique-states row)}))
+     :unique-states (:unique-states row)
+     :ephemeral (= 1 (:ephemeral row))}))
 
 (defrecord MariaDBClient [ds]
   client/Migration
@@ -67,11 +68,11 @@
              (attempt, attempted_by, encoded_args, errors,
               kind, max_attempts, metadata, priority,
               queue, scheduled_at, state, tags,
-              unique_key, unique_states)
+              unique_key, unique_states, ephemeral)
            VALUES (0, JSON_ARRAY(), ?, JSON_ARRAY(),
                    ?, ?, ?, ?,
                    ?, ?, ?, ?,
-                   ?, ?)"
+                   ?, ?, ?)"
         encoded-args
         kind
         (int (:max-attempts opts))
@@ -82,7 +83,8 @@
         initial-state
         (db/->json-str (:tags opts))
         unique-key
-        unique-states]
+        unique-states
+        (if (:ephemeral opts) 1 0)]
        {})
       (let [inserted-id (-> (jdbc/execute-one! tx
                                                ["SELECT LAST_INSERT_ID() AS id"]
@@ -145,9 +147,12 @@
        ["UPDATE drip_job SET state = 'completed', finalized_at = ?
           WHERE id = ? AND state = 'running'"
         now job-id])
-      (row->job (jdbc/execute-one! tx
-                                   ["SELECT * FROM drip_job WHERE id = ?" job-id]
-                                   db/jdbc-opts))))
+      (let [job (row->job (jdbc/execute-one! tx
+                                             ["SELECT * FROM drip_job WHERE id = ?" job-id]
+                                             db/jdbc-opts))]
+        (when (:ephemeral job)
+          (jdbc/execute-one! tx ["DELETE FROM drip_job WHERE id = ?" job-id]))
+        job)))
 
   (fail-job! [_ tx job-id error-map retry-policy]
     (let [now (Instant/now)
@@ -225,12 +230,13 @@
 
   (update-job! [_ tx job-id opts]
     (let [now (Instant/now)
-          {:keys [metadata priority queue scheduled-at state max-attempts tags]} opts
+          {:keys [metadata priority queue scheduled-at state max-attempts tags ephemeral]} opts
           sets (cond-> []
                  (contains? opts :metadata) (conj ["metadata = ?" (db/->json-str metadata)])
                  (contains? opts :priority) (conj ["priority = ?" (int priority)])
                  (contains? opts :queue) (conj ["queue = ?" queue])
                  (contains? opts :max-attempts) (conj ["max_attempts = ?" (int max-attempts)])
+                 (contains? opts :ephemeral) (conj ["ephemeral = ?" (if ephemeral 1 0)])
                  (contains? opts :tags) (conj ["tags = ?" (db/->json-str tags)])
                  (contains? opts :scheduled-at) (conj ["scheduled_at = ?" (encode-ts scheduled-at)]
                                                       ["state = ?"

@@ -409,3 +409,48 @@
           (is (= {"result" 42} (get (:metadata j) "output"))))
         (finally
           (try (worker/stop-executor! executor 1000) (catch Exception _ nil)))))))
+
+(deftest ephemeral-job-deleted-on-completion
+  (testing "ephemeral job is removed from DB immediately after successful completion"
+    (let [done (promise)
+          job-id (atom nil)
+          executor (worker/start-executor!
+                    {:client *client*
+                     :registry {"ephemeral_kind"
+                                (fn [client job]
+                                  (drip/with-tx [tx client]
+                                    (drip/complete-job! client tx (:id job)))
+                                  (deliver done true))}
+                     :poll-interval-ms 50})]
+      (try
+        (let [job (drip/insert-job *client* "ephemeral_kind" {:x 1} {:ephemeral true})]
+          (reset! job-id (:id job))
+          (is (true? (:ephemeral job))))
+        (is (deref done 5000 false))
+        (Thread/sleep 100)
+        (worker/stop-executor! executor 5000)
+        (is (nil? (drip/get-job *client* @job-id)))
+        (is (empty? (drip/list-jobs *client* {:kind "ephemeral_kind" :state :completed})))
+        (finally
+          (try (worker/stop-executor! executor 1000) (catch Exception _ nil)))))))
+
+(deftest ephemeral-job-failure-retries-normally
+  (testing "ephemeral job that fails transitions to :retryable, not deleted"
+    (let [done (promise)
+          executor (worker/start-executor!
+                    {:client *client*
+                     :registry {"ephemeral_fail_kind"
+                                (fn [_ _]
+                                  (deliver done true)
+                                  (throw (RuntimeException. "ephemeral failure")))}
+                     :poll-interval-ms 50})]
+      (try
+        (drip/insert-job *client* "ephemeral_fail_kind" {} {:ephemeral true :max-attempts 3})
+        (deref done 5000 nil)
+        (Thread/sleep 200)
+        (worker/stop-executor! executor 5000)
+        (let [jobs (drip/list-jobs *client* {:kind "ephemeral_fail_kind"})]
+          (is (= 1 (count jobs)))
+          (is (contains? #{:retryable :available} (:state (first jobs)))))
+        (finally
+          (try (worker/stop-executor! executor 1000) (catch Exception _ nil)))))))

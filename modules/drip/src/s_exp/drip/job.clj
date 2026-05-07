@@ -53,7 +53,8 @@
    :priority 1
    :queue "default"
    :tags []
-   :metadata {}})
+   :metadata {}
+   :ephemeral false})
 
 ;; ---------------------------------------------------------------------------
 ;; Retry policy

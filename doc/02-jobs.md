@@ -21,6 +21,7 @@ Every job is returned as a Clojure map (defrecord) with these fields:
 | `:errors` | vector | Error entries from failed attempts `[{:error "..." :trace "..." :at "..."}]` |
 | `:tags` | vector | Arbitrary string tags |
 | `:metadata` | map | User-controlled metadata (string keys) |
+| `:ephemeral` | boolean | If true, row is deleted immediately on successful completion |
 
 ## Job states
 
@@ -82,6 +83,7 @@ If the transaction rolls back, the job is not created.
 | `:tags` | vector of strings | `[]` | Arbitrary labels |
 | `:metadata` | map | `{}` | User-controlled metadata (string keys) |
 | `:unique-opts` | map | nil | Deduplication options (see below) |
+| `:ephemeral` | boolean | `false` | Delete row immediately on successful completion (see below) |
 
 ### Scheduled jobs
 
@@ -167,6 +169,34 @@ The second insert throws `java.sql.SQLException` with SQLState `23505` (PostgreS
 ```
 
 Periodic jobs use unique constraints automatically — no manual handling needed.
+
+## Ephemeral jobs
+
+Ephemeral jobs are deleted from the database immediately upon successful completion instead of transitioning to `:completed`. Failures (retry, discard) behave normally — the row is only removed on success.
+
+Use them for high-throughput fire-and-forget work where you don't need a completion audit trail and want to avoid accumulating `:completed` rows.
+
+```clojure
+(drip/insert-job client "process_event" {:id event-id}
+  :ephemeral true)
+```
+
+The job's handler calls `complete-job!` as usual — the DELETE happens automatically inside `complete-job!`.
+
+```clojure
+(drip/start-executor!
+  {:client   client
+   :registry {"process_event"
+              (fn [client job]
+                (process! (:args job))
+                (drip/complete-job client (:id job)))}})
+```
+
+Ephemeral status can also be set via `update-job!`:
+
+```clojure
+(drip/update-job client job-id {:ephemeral true})
+```
 
 ## Querying jobs
 

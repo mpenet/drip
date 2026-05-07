@@ -102,7 +102,8 @@
      :state (keyword (:state row))
      :tags (pg-array->vec (:tags row))
      :unique-key (:unique-key row)
-     :unique-states (:unique-states row)}))
+     :unique-states (:unique-states row)
+     :ephemeral (boolean (:ephemeral row))}))
 
 ;; ---------------------------------------------------------------------------
 ;; Helpers
@@ -162,11 +163,11 @@
                       (state, attempt, max_attempts, scheduled_at, priority,
                        args, attempted_by, errors,
                        kind, metadata, queue, tags,
-                       unique_key, unique_states)
+                       unique_key, unique_states, ephemeral)
                     VALUES (?::drip_job_state, 0, ?, ?, ?,
                             ?::jsonb, '{}', '{}',
                             ?, ?::jsonb, ?, ?,
-                            ?, ?::bit(8))
+                            ?, ?::bit(8), ?)
                     RETURNING *"
                    initial-state
                    (int (:max-attempts opts))
@@ -178,7 +179,8 @@
                    queue
                    tags-arr
                    unique-key
-                   unique-states-str]
+                   unique-states-str
+                   (boolean (:ephemeral opts))]
                   db/jdbc-opts)]
       (row->job result)))
 
@@ -230,8 +232,11 @@
                      WHERE id = ? AND state = 'running'::drip_job_state
                      RETURNING *"
                    now job-id]
-                  db/jdbc-opts)]
-      (row->job (or result (jdbc/execute-one! tx ["SELECT * FROM drip_job WHERE id = ?" job-id] db/jdbc-opts)))))
+                  db/jdbc-opts)
+          job (row->job (or result (jdbc/execute-one! tx ["SELECT * FROM drip_job WHERE id = ?" job-id] db/jdbc-opts)))]
+      (when (:ephemeral job)
+        (jdbc/execute-one! tx ["DELETE FROM drip_job WHERE id = ?" job-id]))
+      job))
 
   (fail-job! [_ tx job-id error-map retry-policy]
     (let [now (Instant/now)
@@ -319,12 +324,13 @@
 
   (update-job! [_ tx job-id opts]
     (let [now (Instant/now)
-          {:keys [metadata priority queue scheduled-at state max-attempts tags]} opts
+          {:keys [metadata priority queue scheduled-at state max-attempts tags ephemeral]} opts
           sets (cond-> []
                  (contains? opts :metadata) (conj ["metadata = ?::jsonb" (db/->json-str metadata)])
                  (contains? opts :priority) (conj ["priority = ?" (int priority)])
                  (contains? opts :queue) (conj ["queue = ?" queue])
                  (contains? opts :max-attempts) (conj ["max_attempts = ?" (int max-attempts)])
+                 (contains? opts :ephemeral) (conj ["ephemeral = ?" (boolean ephemeral)])
                  (contains? opts :tags) (conj ["tags = ?"
                                                ^"[Ljava.lang.String;" (into-array String (map str tags))])
                  (contains? opts :scheduled-at) (conj ["scheduled_at = ?" (encode-ts scheduled-at)]

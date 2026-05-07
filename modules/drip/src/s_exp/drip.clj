@@ -66,7 +66,19 @@
    `args` - map of job arguments (JSON-serializable)
    `opts` - insert opts as keyword args or a map, e.g.:
      (insert-job client \"k\" {} :queue \"bulk\" :priority 2)
-     (insert-job client \"k\" {} {:queue \"bulk\" :priority 2})"
+     (insert-job client \"k\" {} {:queue \"bulk\" :priority 2})
+
+   Key opts:
+     :queue        - queue name (default \"default\")
+     :priority     - 1–4 (default 1, lower = higher priority)
+     :max-attempts - max retry attempts (default 25)
+     :scheduled-at - java.time.Instant to delay execution until
+     :tags         - vector of string tags
+     :metadata     - map of extra metadata
+     :unique-opts  - map for unique job constraints
+     :ephemeral    - if true, job is deleted immediately on successful completion
+                     instead of transitioning to :completed. Failures behave normally.
+                     Default: false"
   [client kind args & {:as opts}]
   (let [job (with-tx [tx client]
               (client/insert-job! client tx kind args opts))]
@@ -79,7 +91,9 @@
    `args` - map of job arguments (JSON-serializable)
    `opts` - insert opts as keyword args or a map, e.g.:
      (insert-job! client tx \"k\" {} :queue \"bulk\" :priority 2)
-     (insert-job! client tx \"k\" {} {:queue \"bulk\" :priority 2})"
+     (insert-job! client tx \"k\" {} {:queue \"bulk\" :priority 2})
+
+   See insert-job for full opts documentation including :ephemeral."
   [client tx kind args & {:as opts}]
   (client/insert-job! client tx kind args opts))
 
