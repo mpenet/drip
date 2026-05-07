@@ -36,7 +36,7 @@
      :tags (db/<-json (:tags row))
      :unique-key (:unique-key row)
      :unique-states (:unique-states row)
-     :ephemeral (= 1 (:ephemeral row))}))
+     :ephemeral (boolean (:ephemeral row))}))
 
 (defrecord MariaDBClient [ds]
   client/Migration
