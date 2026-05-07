@@ -57,16 +57,16 @@ A handler is a plain function of two arguments: `[client job]`.
                       "slow_job" lenient-policy}  ; per-kind overrides
 
    ;; Timeouts
-   :job-timeouts     {:default  nil        ; global timeout in ms; nil = no limit
-                      "slow_job" 120000}  ; per-kind override (ms)
+   :job-timeouts     {:default  nil       ; global timeout; nil = no limit
+                      "slow_job" "2m"}  ; per-kind override; duration strings or ms
 
    ;; Maintenance
    :rescue-after     {:default "1h"  ; :default = global threshold (duration string or ms)
                       "slow" "4h"}  ; per-queue overrides; nil = disable rescue
-   :retention        {:default  {:completed 86400000    ; 1 day
-                                 :cancelled 86400000    ; 1 day
-                                 :discarded 604800000}  ; 7 days
-                      "fast"    {:completed 3600000}}}) ; per-queue override
+   :retention        {:default  {:completed "24h"  ; 1 day
+                                 :cancelled "24h"  ; 1 day
+                                 :discarded "7d"}  ; 7 days
+                      "fast"    {:completed "1h"}}}) ; per-queue override
 ```
 
 ## Stopping the executor
@@ -194,38 +194,40 @@ Limit how long a single job can run. When exceeded, the job thread is interrupte
 (drip/start-executor!
   {:client     client
    :registry   registry
-   :job-timeouts {:default       30000   ; 30s for all jobs (nil = no timeout)
-                  "slow_report"  120000  ; 2 minutes for this kind
-                  "quick_notify" 5000}}) ; 5 seconds for this kind
+   :job-timeouts {:default       "30s"  ; 30s for all jobs (nil = no timeout)
+                  "slow_report"  "2m"   ; 2 minutes for this kind
+                  "quick_notify" "5s"}}) ; 5 seconds for this kind
 ```
 
-`:default` is the global timeout applied to any kind not listed explicitly. If `:default` is nil (or absent), there is no global timeout. Per-kind entries override `:default` for that kind.
+`:default` is the global timeout applied to any kind not listed explicitly. If `:default` is nil (or absent), there is no global timeout. Per-kind entries override `:default` for that kind. Values accept duration strings (`"30s"`, `"2m"`) or plain millisecond numbers.
 
 ## Retention and cleanup
 
 The executor automatically deletes old finalized jobs on each poll cycle. `:retention` is a unified map: the `:default` key holds the global `{state → ms}` windows, and queue-name string keys hold per-queue overrides merged on top of `:default`.
 
 ```clojure
-{:retention {:default  {:completed 86400000     ; delete completed jobs after 1 day
-                        :cancelled 86400000     ; delete cancelled jobs after 1 day
-                        :discarded 604800000}}} ; delete discarded jobs after 7 days
+{:retention {:default  {:completed "24h"  ; delete completed jobs after 1 day
+                        :cancelled "24h"  ; delete cancelled jobs after 1 day
+                        :discarded "7d"}}} ; delete discarded jobs after 7 days
 ```
+
+Values accept duration strings (`"1h"`, `"30m"`, `"7d"`) or plain millisecond numbers.
 
 Set a state to `nil` to disable cleanup for it. Set `:retention nil` to disable all automatic cleanup.
 
-Default: `{:default {:completed 86400000 :cancelled 86400000 :discarded 604800000}}`.
+Default: `{:default {:completed "24h" :cancelled "24h" :discarded "7d"}}`.
 
 ### Per-queue retention
 
 Add queue-name string keys to `:retention`. Each entry is merged on top of `:default` for that queue — only override the states that differ:
 
 ```clojure
-{:retention {:default  {:completed 86400000       ; global: 1 day
-                        :discarded 604800000}      ; global: 7 days
-             "fast"    {:completed 3600000}        ; fast queue: 1h completed
-             "archive" {:discarded nil}            ; archive queue: never delete discarded
-             "critical" {:completed 2592000000     ; critical queue: 30 days completed
-                         :discarded 2592000000}}}  ; critical queue: 30 days discarded
+{:retention {:default  {:completed "24h"   ; global: 1 day
+                        :discarded "7d"}   ; global: 7 days
+             "fast"    {:completed "1h"}   ; fast queue: 1h completed
+             "archive" {:discarded nil}    ; archive queue: never delete discarded
+             "critical" {:completed "30d"  ; critical queue: 30 days completed
+                         :discarded "30d"}}}  ; critical queue: 30 days discarded
 ```
 
 Queues not listed use `:default`. Setting a state to `nil` in a queue entry disables cleanup for that state on that queue only.

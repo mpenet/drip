@@ -38,7 +38,9 @@
       (if-not worker
         (db/with-tx [tx client]
           (client/discard-job! client tx (:id job)))
-        (let [timeout-ms (get job-timeouts (:kind job) (get job-timeouts :default))
+        (let [timeout-ms (some-> (get job-timeouts (:kind job) (get job-timeouts :default))
+                                 duration/duration
+                                 long)
               [ok? result-or-ex]
               (try
                 [true (run-with-timeout task-executor worker client job timeout-ms)]
@@ -82,10 +84,10 @@
                                    (process-job ctx job)))))
           (.release semaphore (int limit)))))))
 
-(def default-retention-ms
-  {:completed 86400000
-   :cancelled 86400000
-   :discarded 604800000})
+(def default-retention
+  {:completed "24h"
+   :cancelled "24h"
+   :discarded "7d"})
 
 (defn- run-cleaner
   [c tx retention consumed-queues]
@@ -93,11 +95,11 @@
         global (get retention :default)
         per-queue (dissoc retention :default)
         delete! (fn [states-ms qs]
-                  (doseq [[state ms] states-ms]
-                    (when ms
+                  (doseq [[state dur] states-ms]
+                    (when dur
                       (client/delete-jobs! c tx
                                            (cond-> {:states [state]
-                                                    :finalized-before (.minusMillis now (long ms))}
+                                                    :finalized-before (.minusMillis now (long (duration/duration dur)))}
                                              (seq qs) (assoc :queues (vec qs)))))))]
     (doseq [[q-name q-retention] per-queue]
       (delete! (merge global q-retention) [q-name]))
@@ -223,7 +225,7 @@
          retry-policies {:default job/default-retry-policy}
          job-timeouts {:default nil}
          rescue-after {:default "1h"}
-         retention {:default default-retention-ms}}}]
+         retention {:default default-retention}}}]
   (let [worker-id (or worker-id (str (random-uuid)))
         task-executor (make-task-executor concurrency)
         scheduler (Executors/newSingleThreadScheduledExecutor)

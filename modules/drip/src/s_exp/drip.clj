@@ -479,5 +479,5 @@
    (immediate-retry-policy)"
   job/immediate-retry-policy)
 
-(def default-retention-ms worker/default-retention-ms)
+(def default-retention worker/default-retention)
 

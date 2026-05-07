@@ -302,14 +302,14 @@ Persist a handler's result into the job's `metadata` column under the `"output"`
    :worker-id        "my-worker-1"  ; unique ID (default: random UUID)
    :retry-policies   {:default  my-policy              ; default: exponential backoff (attempt^4 ± 10%)
                       "my_kind" fast-retry-policy}    ; per-kind overrides
-   :job-timeouts     {:default  30000                 ; :default = global timeout; nil = no timeout
-                      "slow_job" 120000}             ; per-kind overrides
+   :job-timeouts     {:default  "30s"                 ; :default = global timeout; nil = no timeout
+                      "slow_job" "2m"}              ; per-kind overrides; duration strings or ms
    :rescue-after     {:default "1h"  ; :default = global threshold (duration string or ms)
                       "slow" "4h"}  ; per-queue overrides; nil = disable rescue
-   :retention        {:default  {:completed 86400000  ; :default = global retention windows
-                                 :cancelled 86400000  ;   (nil = disable cleanup)
-                                 :discarded 604800000}
-                      "fast"    {:completed 3600000}  ; per-queue overrides merged with :default
+   :retention        {:default  {:completed "24h"  ; :default = global retention windows
+                                 :cancelled "24h"  ;   (nil = disable cleanup)
+                                 :discarded "7d"}  ; duration strings or ms numbers accepted
+                      "fast"    {:completed "1h"}  ; per-queue overrides merged with :default
                       "archive" {:discarded nil}}})
 ```
 
