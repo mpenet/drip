@@ -123,43 +123,100 @@
 ;; ---------------------------------------------------------------------------
 
 (def ^:private default-refresh-ms 5000)
+(def ^:private page-size 20)
 
 (defn- make-table [jobs]
-  (tbl/table columns (mapv job->row jobs) :cursor 0 :height 20
+  (tbl/table columns (mapv job->row jobs) :cursor 0 :height page-size
              :keys {:cursor-up ["up" "k" "ctrl+p"]
                     :cursor-down ["down" "j" "ctrl+n"]}))
 
 (defn- make-refresh-timer [interval-ms]
   (timer/timer :timeout interval-ms :interval interval-ms))
 
-(defn- status-bar [n auto-refresh?]
-  (str n " jobs  |  q quit  |  enter detail  |  r refresh"
+(defn- status-bar [n page has-next? auto-refresh?]
+  (str n " jobs  |  page " (inc page)
+       (when has-next? "+")
+       "  |  q quit  |  enter detail  |  r refresh"
+       (if has-next? "  |  > next" "")
+       (when (pos? page) "  |  < prev")
        (if auto-refresh? "  |  a pause auto-refresh" "  |  a resume auto-refresh")))
+
+(defn- fetch-page [client base-opts after]
+  (let [opts (cond-> (assoc base-opts :limit (inc page-size))
+               after (assoc :after after))]
+    (drip/list-jobs client opts)))
 
 (defn- init [client opts refresh-ms]
   (fn []
-    (let [jobs (drip/list-jobs client opts)
+    (let [raw (fetch-page client opts nil)
+          has-next? (> (count raw) page-size)
+          jobs (vec (take page-size raw))
           tmr (make-refresh-timer refresh-ms)
           [tmr cmd] (timer/timer-init tmr)]
       [{:mode :list
         :table (make-table jobs)
-        :jobs (vec jobs)
+        :jobs jobs
         :auto-refresh true
         :refresh-ms refresh-ms
         :timer tmr
-        :status (status-bar (count jobs) true)
+        :page 0
+        :page-stack []
+        :has-next? has-next?
+        :status (status-bar (count jobs) 0 has-next? true)
         :message nil}
        cmd])))
 
 (defn- do-refresh [client opts state]
-  (let [jobs (drip/list-jobs client opts)
+  (let [after (peek (:page-stack state))
+        raw (fetch-page client opts after)
+        has-next? (> (count raw) page-size)
+        jobs (vec (take page-size raw))
         [new-tmr cmd] (timer/reset (:timer state) (:refresh-ms state))]
     [(assoc state
-            :jobs (vec jobs)
+            :jobs jobs
             :table (make-table jobs)
             :timer new-tmr
-            :status (status-bar (count jobs) (:auto-refresh state)))
+            :has-next? has-next?
+            :status (status-bar (count jobs) (:page state) has-next? (:auto-refresh state)))
      cmd]))
+
+(defn- go-next-page [client opts state]
+  (let [jobs (:jobs state)
+        after (:id (last jobs))
+        raw (fetch-page client opts after)
+        has-next? (> (count raw) page-size)
+        new-jobs (vec (take page-size raw))]
+    (if (seq new-jobs)
+      (let [new-page (inc (:page state))
+            new-stack (conj (:page-stack state) after)]
+        [(assoc state
+                :jobs new-jobs
+                :table (make-table new-jobs)
+                :page new-page
+                :page-stack new-stack
+                :has-next? has-next?
+                :status (status-bar (count new-jobs) new-page has-next? (:auto-refresh state)))
+         nil])
+      [state nil])))
+
+(defn- go-prev-page [client opts state]
+  (let [stack (:page-stack state)]
+    (if (empty? stack)
+      [state nil]
+      (let [new-stack (pop stack)
+            after (peek new-stack)
+            raw (fetch-page client opts after)
+            has-next? (> (count raw) page-size)
+            new-jobs (vec (take page-size raw))
+            new-page (dec (:page state))]
+        [(assoc state
+                :jobs new-jobs
+                :table (make-table new-jobs)
+                :page new-page
+                :page-stack new-stack
+                :has-next? has-next?
+                :status (status-bar (count new-jobs) new-page has-next? (:auto-refresh state)))
+         nil]))))
 
 (defn- update-fn [client opts]
   (fn [state msg]
@@ -172,16 +229,24 @@
         (msg/key-match? msg "r")
         (do-refresh client opts state)
 
+        (or (msg/key-match? msg ">") (msg/key-match? msg "."))
+        (if (:has-next? state)
+          (go-next-page client opts state)
+          [state nil])
+
+        (or (msg/key-match? msg "<") (msg/key-match? msg ","))
+        (go-prev-page client opts state)
+
         (msg/key-match? msg "a")
         (let [auto? (not (:auto-refresh state))]
           (if auto?
             (let [[new-tmr cmd] (timer/reset (:timer state) (:refresh-ms state))]
               [(assoc state :auto-refresh true :timer new-tmr
-                      :status (status-bar (count (:jobs state)) true))
+                      :status (status-bar (count (:jobs state)) (:page state) (:has-next? state) true))
                cmd])
             (let [[new-tmr _] (timer/stop (:timer state))]
               [(assoc state :auto-refresh false :timer new-tmr
-                      :status (status-bar (count (:jobs state)) false))
+                      :status (status-bar (count (:jobs state)) (:page state) (:has-next? state) false))
                nil])))
 
         (or (msg/key-match? msg "enter") (msg/key-match? msg "return"))
