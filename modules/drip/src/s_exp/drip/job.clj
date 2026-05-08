@@ -66,17 +66,6 @@
   (let [jitter (* ms jitter-factor (- (rand) 0.5))]
     (max 0 (long (+ ms jitter)))))
 
-(defn- retry-delay-seconds
-  "Exponential backoff: attempt^4 seconds ± 10% jitter."
-  ^long [^long attempt]
-  (add-jitter (long (* (Math/pow attempt 4) 1000)) 0.1))
-
-(defn default-retry-policy
-  "Returns a java.time.Instant for the next retry. attempt is 1-based.
-   Uses exponential backoff: attempt^4 seconds ± 10% jitter."
-  [^long attempt]
-  (.plusMillis (Instant/now) (retry-delay-seconds attempt)))
-
 (defn constant-retry-policy
   "Returns a retry policy fn that always waits `delay` between retries.
    `delay` is a duration value: string (e.g. \"30s\", \"2m\") or number of milliseconds.
@@ -114,6 +103,11 @@
       (let [raw (long (* base-ms (Math/pow multiplier (dec attempt))))
             ms (add-jitter (min raw max-ms) jitter)]
         (.plusMillis (Instant/now) ms)))))
+
+(def default-retry-policy
+  "Exponential backoff: base 1s, multiplier 2, max 1h, ±10% jitter.
+   Delays: ~1s, ~2s, ~4s, ~8s, ~16s, ~32s, ... capped at ~1h."
+  (exponential-retry-policy "1s"))
 
 (defn immediate-retry-policy
   "Returns a retry policy fn that retries immediately with no delay.

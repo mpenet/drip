@@ -301,7 +301,7 @@ Persist a handler's result into the job's `metadata` column under the `"output"`
    :concurrency      10             ; max simultaneous in-flight jobs (default 10)
    :poll-interval-ms 1000           ; polling interval in ms (default 1000)
    :worker-id        "my-worker-1"  ; unique ID (default: random UUID)
-   :retry-policies   {:default  my-policy              ; default: exponential backoff (attempt^4 ± 10%)
+   :retry-policies   {:default  my-policy              ; default: exponential backoff (1s, x2, max 1h, ±10%)
                       "my_kind" fast-retry-policy}    ; per-kind overrides
    :job-timeouts     {:default  "30s"                 ; :default = global timeout; nil = no timeout
                       "slow_job" "2m"}              ; per-kind overrides; duration strings or ms
@@ -321,7 +321,7 @@ On PostgreSQL, a `LISTEN` connection starts automatically. Inserts in other proc
 Drip ships several built-in policy constructors. All take attempt (1-based long) and return a `java.time.Instant`.
 
 ```clojure
-;; Default: attempt^4 seconds ± 10% jitter (25 attempts ≈ 4 days total)
+;; Default: exponential backoff, base 1s, multiplier 2, max 1h, ±10% jitter
 drip/default-retry-policy
 
 ;; Always wait a fixed delay (duration string or raw ms number)

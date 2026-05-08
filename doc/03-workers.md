@@ -128,17 +128,19 @@ A retry policy is a plain function `(fn [attempt] java.time.Instant)`. The `atte
 
 ### Default policy
 
-Exponential backoff: `attempt^4` seconds ± 10% jitter.
+Exponential backoff: base 1s, multiplier 2, max 1h, ±10% jitter. Equivalent to `(drip/exponential-retry-policy "1s")`.
 
 | Attempt | Approx delay |
 |---|---|
-| 1 | 1s |
-| 2 | 16s |
-| 3 | 81s |
-| 4 | 4.3m |
-| 5 | 10.4m |
-| 10 | 27.8h |
-| 20 | ~160 days |
+| 1 | ~1s |
+| 2 | ~2s |
+| 3 | ~4s |
+| 4 | ~8s |
+| 5 | ~16s |
+| 6 | ~32s |
+| 7 | ~64s |
+| 10 | ~8.5m |
+| 14+ | ~1h (capped) |
 
 ### Built-in policy constructors
 

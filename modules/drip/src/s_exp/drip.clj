@@ -456,7 +456,8 @@
 
 (def default-retry-policy
   "Default retry policy fn. Takes attempt (1-based long), returns java.time.Instant.
-   Uses exponential backoff: attempt^4 seconds ± 10% jitter."
+   Exponential backoff: base 1s, multiplier 2, max 1h, ±10% jitter.
+   Delays: ~1s, ~2s, ~4s, ~8s, ~16s, ~32s, ... capped at ~1h."
   job/default-retry-policy)
 
 (def constant-retry-policy
