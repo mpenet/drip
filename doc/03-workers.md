@@ -58,16 +58,10 @@ A handler is a plain function of two arguments: `[client job]`.
 
    ;; Timeouts
    :job-timeouts     {:default  nil       ; global timeout; nil = no limit
-                      "slow_job" "2m"}  ; per-kind override; duration strings or ms
-
-   ;; Maintenance
-   :rescue-after     {:default "1h"  ; :default = global threshold (duration string or ms)
-                      "slow" "4h"}  ; per-queue overrides; nil = disable rescue
-   :retention        {:default  {:completed "24h"  ; 1 day
-                                 :cancelled "24h"  ; 1 day
-                                 :discarded "7d"}  ; 7 days
-                      "fast"    {:completed "1h"}}}) ; per-queue override
+                      "slow_job" "2m"}}) ; per-kind override; duration strings or ms
 ```
+
+Rescue, retention, and reindex are handled by the [maintenance worker](#maintenance-worker).
 
 ## Stopping the executor
 
@@ -203,36 +197,68 @@ Limit how long a single job can run. When exceeded, the job thread is interrupte
 
 `:default` is the global timeout applied to any kind not listed explicitly. If `:default` is nil (or absent), there is no global timeout. Per-kind entries override `:default` for that kind. Values accept duration strings (`"30s"`, `"2m"`) or plain millisecond numbers.
 
-## Retention and cleanup
+## Maintenance worker
 
-The executor automatically deletes old finalized jobs on each poll cycle. `:retention` is a unified map: the `:default` key holds the global `{state → ms}` windows, and queue-name string keys hold per-queue overrides merged on top of `:default`.
-
-```clojure
-{:retention {:default  {:completed "24h"  ; delete completed jobs after 1 day
-                        :cancelled "24h"  ; delete cancelled jobs after 1 day
-                        :discarded "7d"}}} ; delete discarded jobs after 7 days
-```
-
-Values accept duration strings (`"1h"`, `"30m"`, `"7d"`) or plain millisecond numbers.
-
-Set a state to `nil` to disable cleanup for it. Set `:retention nil` to disable all automatic cleanup.
-
-Default: `{:default {:completed "24h" :cancelled "24h" :discarded "7d"}}`.
-
-### Per-queue retention
-
-Add queue-name string keys to `:retention`. Each entry is merged on top of `:default` for that queue — only override the states that differ:
+Rescue, retention cleanup, and index maintenance run in a separate `MaintenanceWorker`, independent of the job executor. Each task runs on its own thread so a slow operation (e.g. a large DELETE sweep or a long REINDEX) does not block the others.
 
 ```clojure
-{:retention {:default  {:completed "24h"   ; global: 1 day
-                        :discarded "7d"}   ; global: 7 days
-             "fast"    {:completed "1h"}   ; fast queue: 1h completed
-             "archive" {:discarded nil}    ; archive queue: never delete discarded
-             "critical" {:completed "30d"  ; critical queue: 30 days completed
-                         :discarded "30d"}}}  ; critical queue: 30 days discarded
+(def maintenance
+  (drip/start-maintenance-worker!
+    {:client client
+
+     ;; Rescue stuck jobs (running longer than threshold)
+     :rescue-after     {:default "1h"   ; global threshold; duration string or ms
+                        "slow"   "4h"}  ; per-queue overrides; nil = disable for that queue
+     :rescue-interval  "1m"             ; how often to run rescue (default "1m")
+     :retry-policy     drip/default-retry-policy  ; policy used when rescuing
+
+     ;; Retention cleanup
+     :retention        {:default  {:completed "24h"
+                                   :cancelled "24h"
+                                   :discarded "7d"}
+                        "fast"    {:completed "1h"}      ; per-queue override
+                        "archive" {:discarded nil}}       ; disable discard cleanup
+     :retention-interval "1m"           ; how often to run cleanup (default "1m")
+
+     ;; Reindex (PostgreSQL only, no-op on others)
+     :reindex-interval "24h"            ; nil = disabled (default)
+
+     ;; Which queues rescue/retention apply to
+     :queues ["default" "fast" "slow"]}))
+
+(drip/stop-maintenance-worker! maintenance)         ; default 5s timeout
+(drip/stop-maintenance-worker! maintenance 10000)   ; custom timeout
 ```
 
-Queues not listed use `:default`. Setting a state to `nil` in a queue entry disables cleanup for that state on that queue only.
+All interval values (`:rescue-interval`, `:retention-interval`, `:reindex-interval`) accept duration strings (`"1m"`, `"24h"`) or raw millisecond numbers.
+
+Set `:rescue-after nil` to disable rescue entirely. Set `:retention nil` to disable all retention cleanup.
+
+### Rescue
+
+Rescue finds jobs that have been in `:running` state longer than the configured threshold — indicating the worker that claimed them crashed or was killed — and moves them to `:retryable` or `:discarded` (if max attempts exhausted). The rescue threshold should be longer than your longest expected job duration.
+
+### Retention
+
+Retention deletes finalized jobs older than the configured windows. `:default` is the global `{state → duration}` map. Queue-name string keys are per-queue overrides merged on top of `:default`:
+
+```clojure
+{:retention {:default   {:completed "24h" :discarded "7d"}
+             "fast"     {:completed "1h"}      ; override only completed for this queue
+             "archive"  {:discarded nil}}}      ; never delete discarded on archive queue
+```
+
+Values accept duration strings or raw milliseconds. Set a state to `nil` to disable cleanup for that state.
+
+### Reindex (PostgreSQL only)
+
+Periodically runs `REINDEX INDEX CONCURRENTLY` on drip's job indexes to recover index bloat. No-op on MariaDB and SQLite.
+
+**Important:** with multiple nodes, you are responsible for leader election — running reindex on every node simultaneously is safe but wasteful. Disable it on non-leader nodes by not passing `:reindex-interval`.
+
+Skips any index where leftover `_ccnew`/`_ccold` artifacts from a previous failed concurrent reindex are detected — safe to retry on the next run.
+
+Returns `{index-name-keyword => :reindexed | :skipped | :not-found}` per run (logged automatically).
 
 ## PostgreSQL LISTEN/NOTIFY
 
@@ -263,7 +289,7 @@ You can run multiple executors in the same process, or across multiple processes
      :worker-id   "bulk-worker"}))
 ```
 
-Each executor maintains its own semaphore and scheduler. `rescue-stuck-jobs!` uses the worker's own `worker-id` to avoid interfering with jobs owned by other workers — actually, it rescues *all* stuck jobs regardless of which worker claimed them, so any live executor can rescue orphaned jobs from a crashed process.
+Each executor maintains its own semaphore and scheduler. Any live maintenance worker can rescue orphaned jobs from a crashed process — rescue operates across all workers, not just the one that originally claimed the job.
 
 ## Unknown job kinds
 

@@ -285,16 +285,37 @@
       (is (= 500 (get (:job-timeouts ex) "slow_kind")))
       (drip/stop-executor! ex 1000))))
 
-(deftest rescue-after-unified-map-test
-  (testing ":rescue-after unified map stored in executor record"
-    (let [ex (drip/start-executor!
+(deftest maintenance-worker-rescue-test
+  (testing "maintenance worker rescues a stuck running job"
+    (let [j (drip/insert-job *client* "k" {} {:max-attempts 3 :queue "maint-rescue-q"})
+          _ (drip/fetch-jobs *client* "maint-rescue-q" "w" :limit 1)
+          stuck-at (.minusSeconds (Instant/now) 7200)
+          _ (drip/with-tx [tx *client*]
+              (jdbc/execute-one! tx
+                                 ["UPDATE drip_job SET attempted_at = ? WHERE id = ?"
+                                  (db/instant->ts stuck-at) (:id j)]))
+          mw (drip/start-maintenance-worker!
               {:client *client*
-               :registry {}
+               :queues ["maint-rescue-q"]
+               :rescue-after {:default "1h"}
+               :rescue-interval 100
+               :retention nil})]
+      (try
+        (Thread/sleep 400)
+        (drip/stop-maintenance-worker! mw 5000)
+        (is (= :retryable (:state (drip/get-job *client* (:id j)))))
+        (finally
+          (try (drip/stop-maintenance-worker! mw 1000) (catch Exception _ nil))))))
+
+  (testing ":rescue-after map stored in maintenance worker record"
+    (let [mw (drip/start-maintenance-worker!
+              {:client *client*
                :rescue-after {:default "2h" "slow" "4h"}
-               :poll-interval-ms 999999})]
-      (is (= "2h" (get (:rescue-after ex) :default)))
-      (is (= "4h" (get (:rescue-after ex) "slow")))
-      (drip/stop-executor! ex 1000))))
+               :rescue-interval 999999
+               :retention nil})]
+      (is (= "2h" (get (:rescue-after mw) :default)))
+      (is (= "4h" (get (:rescue-after mw) "slow")))
+      (drip/stop-maintenance-worker! mw 1000))))
 
 (deftest handler-receives-client-and-job
   (testing "handler receives client as first arg and job as second"

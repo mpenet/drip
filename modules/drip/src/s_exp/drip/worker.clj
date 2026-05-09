@@ -4,10 +4,11 @@
             [s-exp.drip.db :as db]
             [s-exp.drip.job :as job]
             [s-exp.duration :as duration])
-  (:import (java.time Instant)
-           (java.util.concurrent ExecutionException Executors ExecutorService
+  (:import (java.util.concurrent ExecutionException Executors ExecutorService
                                  Future ScheduledExecutorService Semaphore
                                  TimeUnit TimeoutException)))
+
+(set! *warn-on-reflection* true)
 
 ;; ---------------------------------------------------------------------------
 ;; Executor internals
@@ -84,55 +85,10 @@
                                    (process-job ctx job)))))
           (.release semaphore (int limit)))))))
 
-(def default-retention
-  {:completed "24h"
-   :cancelled "24h"
-   :discarded "7d"})
-
-(defn- run-cleaner
-  [c tx retention consumed-queues]
-  (let [now (Instant/now)
-        global (get retention :default)
-        per-queue (dissoc retention :default)
-        delete! (fn [states-ms qs]
-                  (doseq [[state dur] states-ms]
-                    (when dur
-                      (client/delete-jobs! c tx
-                                           (cond-> {:states [state]
-                                                    :finalized-before (.minusMillis now (long (duration/duration dur)))}
-                                             (seq qs) (assoc :queues (vec qs)))))))]
-    (doseq [[q-name q-retention] per-queue]
-      (delete! (merge global q-retention) [q-name]))
-    (when (seq global)
-      (let [overridden (set (keys per-queue))
-            global-qs (seq (remove overridden consumed-queues))]
-        (when (or (empty? overridden) (seq global-qs))
-          (delete! global global-qs))))))
-
-(defn- do-poll
-  [{:keys [client retry-policies queues rescue-after retention] :as ctx}]
+(defn- do-poll [{:keys [client queues] :as ctx}]
   (try
     (db/with-tx [tx client]
-      (client/promote-scheduled-jobs! client tx)
-      (when rescue-after
-        (let [now (Instant/now)
-              default-dur (get rescue-after :default)
-              per-queue (dissoc rescue-after :default)
-              rescue! (fn [dur qs]
-                        (when dur
-                          (client/rescue-stuck-jobs! client tx
-                                                     (.minusMillis now (long (duration/duration dur)))
-                                                     (get retry-policies :default)
-                                                     qs)))]
-          (doseq [[q-name q-dur] per-queue]
-            (rescue! q-dur [q-name]))
-          (when default-dur
-            (let [overridden (set (keys per-queue))
-                  global-qs (seq (remove overridden queues))]
-              (when (or (empty? overridden) (seq global-qs))
-                (rescue! default-dur global-qs))))))
-      (when retention
-        (run-cleaner client tx retention queues)))
+      (client/promote-scheduled-jobs! client tx))
     (catch Exception t (log/error t "drip: poll maintenance error")))
   (doseq [q queues]
     (try
@@ -152,8 +108,6 @@
             concurrency
             poll-interval-ms
             worker-id
-            rescue-after
-            retention
             ^ExecutorService task-executor
             ^ScheduledExecutorService scheduler
             ^Semaphore semaphore
@@ -194,38 +148,18 @@
                           Example: {:default 30000
                                     \"slow_report\" 120000
                                     \"quick_notify\" 5000}
-     :rescue-after      - unified rescue config map. :default is the global stuck threshold;
-                          queue-name string keys override per queue. Each value is a duration:
-                          ms number or duration string (e.g. \"1h\", \"30m\").
-                          Set :default to nil to disable global rescue. Set :rescue-after nil
-                          to disable rescue entirely.
-                          Default: {:default \"1h\"}
-                          Example: {:default \"1h\" \"slow\" \"4h\" \"fast\" \"15m\"}
-     :retention         - unified retention config map. Keys are either :default (the global
-                          {state → ms} map) or queue-name strings (per-queue {state → ms} overrides).
-                          Per-queue entries are merged on top of :default for that queue.
-                          Set a state to nil to disable cleanup for it. Set :retention nil to
-                          disable all automatic cleanup.
-                          Default: {:default {:completed 86400000
-                                              :cancelled 86400000
-                                              :discarded 604800000}}
-                          Example: {:default  {:completed 86400000 :discarded 604800000}
-                                    \"fast\"    {:completed 3600000}
-                                    \"archive\" {:discarded nil}}
 
    On PostgreSQL, a LISTEN connection is started automatically; inserts from
    other processes trigger an immediate poll instead of waiting for the interval.
 
    Returns an Executor record. Stop with stop-executor!."
   [{:keys [client registry retry-policies job-timeouts queues
-           concurrency poll-interval-ms worker-id rescue-after retention]
+           concurrency poll-interval-ms worker-id]
     :or {queues ["default"]
          concurrency 10
          poll-interval-ms 1000
          retry-policies {:default job/default-retry-policy}
-         job-timeouts {:default nil}
-         rescue-after {:default "1h"}
-         retention {:default default-retention}}}]
+         job-timeouts {:default nil}}}]
   (let [worker-id (or worker-id (str (random-uuid)))
         task-executor (make-task-executor concurrency)
         scheduler (Executors/newSingleThreadScheduledExecutor)
@@ -238,8 +172,6 @@
              :queues queues
              :worker-id worker-id
              :concurrency concurrency
-             :rescue-after rescue-after
-             :retention retention
              :task-executor task-executor
              :semaphore semaphore}
         poll-fn (fn []
@@ -264,8 +196,6 @@
       :concurrency concurrency
       :poll-interval-ms poll-interval-ms
       :worker-id worker-id
-      :rescue-after rescue-after
-      :retention retention
       :task-executor task-executor
       :scheduler scheduler
       :semaphore semaphore

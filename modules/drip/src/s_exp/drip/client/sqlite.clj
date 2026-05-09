@@ -416,7 +416,10 @@
       (boolean (and row (:paused-at row)))))
 
   (list-queues! [_ tx]
-    (jdbc/execute! tx ["SELECT * FROM drip_queue ORDER BY name"] db/jdbc-opts)))
+    (jdbc/execute! tx ["SELECT * FROM drip_queue ORDER BY name"] db/jdbc-opts))
+
+  client/Maintenance
+  (reindex! [_] {}))
 
 (defn make-client
   "Returns a SQLite client. `ds` is a javax.sql.DataSource.

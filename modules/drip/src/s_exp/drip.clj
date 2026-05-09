@@ -29,6 +29,7 @@
   (:require [s-exp.drip.client :as client]
             [s-exp.drip.db :as db]
             [s-exp.drip.job :as job]
+            [s-exp.drip.maintenance :as maintenance]
             [s-exp.drip.periodic :as periodic]
             [s-exp.drip.worker :as worker]))
 
@@ -55,6 +56,19 @@
   "Creates all drip_* tables and indexes. Idempotent - safe to call on startup."
   [client]
   (db/migrate! client))
+
+(defn reindex!
+  "Rebuilds drip job indexes to recover bloat. PostgreSQL only.
+   No-op on MariaDB/SQLite.
+
+   Caller is responsible for scheduling and leader election — running on
+   every node simultaneously is safe but wasteful.
+
+   Must NOT be called inside a transaction (REINDEX CONCURRENTLY requirement).
+
+   Returns {index-name-keyword => :reindexed | :skipped | :not-found}."
+  [client]
+  (maintenance/reindex! client))
 
 ;; ---------------------------------------------------------------------------
 ;; Job operations
@@ -415,9 +429,8 @@
    Key options:
      :retry-policies - {:default policy-fn, \"kind\" policy-fn} unified retry map
      :job-timeouts   - {:default timeout-ms, \"kind\" timeout-ms} unified timeout map (nil = no timeout)
-     :rescue-after   - {:default duration, \"queue\" duration} unified rescue map (nil or :default nil = disable)
-     :retention      - {:default {state → ms}, \"queue\" {state → ms}} unified retention map
-                       Set :retention nil to disable all cleanup."
+
+   For rescue and retention, use start-maintenance-worker! separately."
   [opts]
   (worker/start-executor! opts))
 
@@ -494,5 +507,34 @@
    (immediate-retry-policy)"
   job/immediate-retry-policy)
 
-(def default-retention worker/default-retention)
+(def default-retention maintenance/default-retention)
+
+;; ---------------------------------------------------------------------------
+;; Maintenance worker
+;; ---------------------------------------------------------------------------
+
+(defn start-maintenance-worker!
+  "Starts a maintenance worker that periodically runs rescue and retention cleanup.
+   See s-exp.drip.maintenance/start-maintenance-worker! for full option docs.
+
+   Key options:
+     :queues                - queues to apply rescue/retention to (default [\"default\"])
+     :rescue-after       - {:default duration, \"queue\" duration} (nil = disable)
+     :rescue-interval    - how often to run rescue; duration string or ms (default \"1m\")
+     :retry-policy       - policy fn used when rescuing stuck jobs
+     :retention          - {:default {state->duration}, \"queue\" {state->duration}} (nil = disable)
+     :retention-interval - how often to run retention cleanup; duration string or ms (default \"1m\")
+     :reindex-interval   - how often to reindex; duration string or ms; nil = disabled.
+                           PostgreSQL only. Caller handles leader election.
+
+   Returns a MaintenanceWorker record. Stop with stop-maintenance-worker!."
+  [opts]
+  (maintenance/start-maintenance-worker! opts))
+
+(defn stop-maintenance-worker!
+  "Shuts down the maintenance worker. Optional second arg: timeout-ms (default 5000)."
+  ([worker]
+   (maintenance/stop-maintenance-worker! worker))
+  ([worker timeout-ms]
+   (maintenance/stop-maintenance-worker! worker timeout-ms)))
 

@@ -106,7 +106,7 @@ Full documentation is in the [`doc/`](doc/) directory:
 
 - [Getting Started](doc/01-getting-started.md) — installation, client setup, migrations, lifecycle
 - [Jobs](doc/02-jobs.md) — inserting, querying, updating, unique constraints, retries
-- [Workers and the Executor](doc/03-workers.md) — registry, concurrency, retry policies, timeouts, retention
+- [Workers and the Executor](doc/03-workers.md) — registry, concurrency, retry policies, timeouts, maintenance worker (rescue, retention, reindex)
 - [Queues](doc/04-queues.md) — pause/resume, multi-queue routing
 - [Periodic Jobs](doc/05-periodic-jobs.md) — fixed-interval scheduling, deduplication
 - [Patterns](doc/06-patterns.md) — transactional enqueue, outbox, fanout, chaining, testing
@@ -304,17 +304,36 @@ Persist a handler's result into the job's `metadata` column under the `"output"`
    :retry-policies   {:default  my-policy              ; default: exponential backoff (1s, x2, max 1h, ±10%)
                       "my_kind" fast-retry-policy}    ; per-kind overrides
    :job-timeouts     {:default  "30s"                 ; :default = global timeout; nil = no timeout
-                      "slow_job" "2m"}              ; per-kind overrides; duration strings or ms
-   :rescue-after     {:default "1h"  ; :default = global threshold (duration string or ms)
-                      "slow" "4h"}  ; per-queue overrides; nil = disable rescue
-   :retention        {:default  {:completed "24h"  ; :default = global retention windows
-                                 :cancelled "24h"  ;   (nil = disable cleanup)
-                                 :discarded "7d"}  ; duration strings or ms numbers accepted
-                      "fast"    {:completed "1h"}  ; per-queue overrides merged with :default
-                      "archive" {:discarded nil}}})
+                      "slow_job" "2m"}})              ; per-kind overrides; duration strings or ms
 ```
 
 On PostgreSQL, a `LISTEN` connection starts automatically. Inserts in other processes trigger an immediate poll.
+
+### Maintenance worker
+
+Rescue, retention cleanup, and index maintenance run in a separate worker. Each task runs on its own thread.
+
+```clojure
+(def maintenance
+  (drip/start-maintenance-worker!
+    {:client client
+     :queues ["default" "fast"]
+
+     ;; Rescue stuck jobs
+     :rescue-after    {:default "1h" "slow" "4h"}  ; duration string or ms; nil = disable
+     :rescue-interval "1m"                          ; how often to run (default "1m")
+
+     ;; Retention cleanup
+     :retention        {:default  {:completed "24h" :cancelled "24h" :discarded "7d"}
+                        "fast"    {:completed "1h"}
+                        "archive" {:discarded nil}}
+     :retention-interval "1m"                       ; how often to run (default "1m")
+
+     ;; Reindex (PostgreSQL only, no-op on others; nil = disabled)
+     :reindex-interval "24h"}))                     ; duration string or ms
+
+(drip/stop-maintenance-worker! maintenance)          ; stop, default 5s timeout
+```
 
 ### Retry policies
 

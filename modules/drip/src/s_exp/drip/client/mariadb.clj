@@ -412,7 +412,10 @@
   (list-queues! [_ tx]
     (jdbc/execute! tx
                    ["SELECT * FROM drip_queue ORDER BY name"]
-                   db/jdbc-opts)))
+                   db/jdbc-opts))
+
+  client/Maintenance
+  (reindex! [_] {}))
 
 (defn make-client
   "Returns a MariaDB client. `ds` is a javax.sql.DataSource."

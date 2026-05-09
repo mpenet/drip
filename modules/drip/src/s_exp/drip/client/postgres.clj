@@ -505,7 +505,40 @@
       (boolean (and row (:paused-at row)))))
 
   (list-queues! [_ tx]
-    (jdbc/execute! tx ["SELECT * FROM drip_queue ORDER BY name"] db/jdbc-opts)))
+    (jdbc/execute! tx ["SELECT * FROM drip_queue ORDER BY name"] db/jdbc-opts))
+
+  client/Maintenance
+  (reindex! [{:keys [ds]}]
+    (let [index-names ["drip_job_prioritized_fetching_index"
+                       "drip_job_kind"
+                       "drip_job_state_and_finalized_at_index"
+                       "drip_job_args_index"
+                       "drip_job_metadata_index"
+                       "drip_job_unique_idx"]]
+      (with-open [conn (.getConnection ^javax.sql.DataSource ds)]
+        (reduce
+         (fn [results index-name]
+           (let [exists? (-> (jdbc/execute-one!
+                              conn
+                              ["SELECT 1 FROM pg_class WHERE relname = ? AND relkind = 'i'" index-name]
+                              db/jdbc-opts)
+                             some?)
+                 artifact? (-> (jdbc/execute-one!
+                                conn
+                                ["SELECT 1 FROM pg_class WHERE relname IN (?, ?) AND relkind = 'i'"
+                                 (str index-name "_ccnew") (str index-name "_ccold")]
+                                db/jdbc-opts)
+                               some?)]
+             (assoc results
+                    (keyword index-name)
+                    (cond
+                      (not exists?) :not-found
+                      artifact? :skipped
+                      :else (do
+                              (.execute conn (str "REINDEX INDEX CONCURRENTLY " index-name))
+                              :reindexed)))))
+         {}
+         index-names)))))
 
 ;; ---------------------------------------------------------------------------
 ;; COPY-based fast batch insert

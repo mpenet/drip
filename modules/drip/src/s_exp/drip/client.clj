@@ -93,6 +93,14 @@
        :limit            - max rows (default 100)
        :after            - job ID cursor; returns jobs with id < after (for DESC pagination)"))
 
+(defprotocol Maintenance
+  (reindex! [client]
+    "Rebuilds database indexes to recover bloat. Only meaningful on PostgreSQL
+     (uses REINDEX CONCURRENTLY). No-op on MariaDB and SQLite.
+     Returns a map of {:index-name keyword, :status :reindexed|:skipped|:not-found}.
+     Skipped when leftover _ccnew/_ccold artifacts from a previous failed
+     concurrent reindex are detected — safe to retry later."))
+
 (defprotocol Queues
   (upsert-queue! [client tx queue-name metadata]
     "Creates or updates a queue.")
