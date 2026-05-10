@@ -42,11 +42,11 @@
     -  [`retry-job!`](#s-exp.drip/retry-job!) - Forces a failed/cancelled/discarded job back to :available.
     -  [`snooze-job`](#s-exp.drip/snooze-job) - Reschedules a :running job to run again after duration without consuming a retry attempt.
     -  [`snooze-job!`](#s-exp.drip/snooze-job!) - Reschedules a :running job to run again after duration without consuming a retry attempt.
-    -  [`start-executor!`](#s-exp.drip/start-executor!) - Starts polling queues and processing jobs.
-    -  [`start-periodic-executor!`](#s-exp.drip/start-periodic-executor!) - Schedules periodic job insertions.
-    -  [`stop-and-cancel!`](#s-exp.drip/stop-and-cancel!) - Immediately interrupts all in-flight jobs and shuts down the executor.
-    -  [`stop-executor!`](#s-exp.drip/stop-executor!) - Gracefully stops the executor.
-    -  [`stop-periodic-executor!`](#s-exp.drip/stop-periodic-executor!) - Stops the periodic job scheduler.
+    -  [`start-worker!`](#s-exp.drip/start-worker!) - Starts polling queues and processing jobs.
+    -  [`start-periodic-jobs!`](#s-exp.drip/start-periodic-jobs!) - Schedules periodic job insertions.
+    -  [`stop-and-cancel!`](#s-exp.drip/stop-and-cancel!) - Immediately interrupts all in-flight jobs and shuts down the worker.
+    -  [`stop-worker!`](#s-exp.drip/stop-worker!) - Gracefully stops the worker.
+    -  [`stop-periodic-jobs!`](#s-exp.drip/stop-periodic-jobs!) - Stops the periodic job scheduler.
     -  [`swap-job`](#s-exp.drip/swap-job) - Fetches a job by ID, applies f to it, and updates writable fields from the returned map.
     -  [`swap-job!`](#s-exp.drip/swap-job!) - Fetches a job by ID within the supplied tx, applies f to it, and updates writable fields from the returned map.
     -  [`update-job`](#s-exp.drip/update-job) - Updates writable fields of a job.
@@ -118,13 +118,13 @@
     -  [`states`](#s-exp.drip.job/states)
     -  [`states->bitmask`](#s-exp.drip.job/states->bitmask) - Converts a collection of state keywords to an integer bitmask.
 -  [`s-exp.drip.periodic`](#s-exp.drip.periodic) 
-    -  [`start-periodic-executor!`](#s-exp.drip.periodic/start-periodic-executor!) - Schedules periodic job insertions for a sequence of spec maps.
-    -  [`stop-periodic-executor!`](#s-exp.drip.periodic/stop-periodic-executor!) - Shuts down the periodic executor.
+    -  [`start-periodic-jobs!`](#s-exp.drip.periodic/start-periodic-jobs!) - Schedules periodic job insertions for a sequence of spec maps.
+    -  [`stop-periodic-jobs!`](#s-exp.drip.periodic/stop-periodic-jobs!) - Shuts down the periodic executor.
 -  [`s-exp.drip.worker`](#s-exp.drip.worker) 
     -  [`default-retention`](#s-exp.drip.worker/default-retention)
-    -  [`start-executor!`](#s-exp.drip.worker/start-executor!) - Starts a job executor that polls queues and dispatches jobs to workers.
+    -  [`start-worker!`](#s-exp.drip.worker/start-worker!) - Starts a job worker that polls queues and dispatches jobs to handlers.
     -  [`stop-and-cancel!`](#s-exp.drip.worker/stop-and-cancel!) - Immediately cancels all in-flight jobs by interrupting their threads, then shuts down.
-    -  [`stop-executor!`](#s-exp.drip.worker/stop-executor!) - Gracefully shuts down the executor.
+    -  [`stop-worker!`](#s-exp.drip.worker/stop-worker!) - Gracefully shuts down the worker.
 
 -----
 # <a name="s-exp.drip">s-exp.drip</a>
@@ -145,9 +145,9 @@ Drip: a Clojure job queue for MariaDB, PostgreSQL, and SQLite.
      ;; 2. Run migrations (idempotent)
      (drip/migrate! client)
 
-     ;; 3. Start the executor (registry maps kind strings to (fn [client job] ...) fns)
-     (def executor
-       (drip/start-executor!
+     ;; 3. Start the worker (registry maps kind strings to (fn [client job] ...) fns)
+     (def worker
+       (drip/start-worker!
          {:client client
           :registry {"send_email" (fn [_ job] (send-email! (:args job)))}
           :queues ["default" "priority"]}))
@@ -156,7 +156,7 @@ Drip: a Clojure job queue for MariaDB, PostgreSQL, and SQLite.
      (drip/insert-job client "send_email" {:to "user@example.com"})
 
      ;; 5. Stop on shutdown
-     (drip/stop-executor! executor)
+     (drip/stop-worker! worker)
 
 
 
@@ -669,15 +669,15 @@ Reschedules a :running job to run again after duration without consuming a retry
    Uses the supplied tx. Returns updated Job record.
 <p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L308-L313">Source</a></sub></p>
 
-## <a name="s-exp.drip/start-executor!">`start-executor!`</a>
+## <a name="s-exp.drip/start-worker!">`start-worker!`</a>
 ``` clojure
 
-(start-executor! opts)
+(start-worker! opts)
 ```
 Function.
 
 Starts polling queues and processing jobs.
-   :client and :registry are required. See s-exp.drip.worker/start-executor! for full option docs.
+   :client and :registry are required. See s-exp.drip.worker/start-worker! for full option docs.
 
    Registry handlers receive [client job] as two arguments.
    Handlers must explicitly call complete-job!, snooze-job!, etc. to manage job state.
@@ -691,44 +691,44 @@ Starts polling queues and processing jobs.
                        Set :retention nil to disable all cleanup.
 <p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L407-L422">Source</a></sub></p>
 
-## <a name="s-exp.drip/start-periodic-executor!">`start-periodic-executor!`</a>
+## <a name="s-exp.drip/start-periodic-jobs!">`start-periodic-jobs!`</a>
 ``` clojure
 
-(start-periodic-executor! client specs)
+(start-periodic-jobs! client specs)
 ```
 Function.
 
 Schedules periodic job insertions. `specs` is a sequence of PeriodicSpec maps.
-   Returns a scheduler; stop with stop-periodic-executor!.
+   Returns a scheduler; stop with stop-periodic-jobs!.
 <p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L442-L446">Source</a></sub></p>
 
 ## <a name="s-exp.drip/stop-and-cancel!">`stop-and-cancel!`</a>
 ``` clojure
 
-(stop-and-cancel! executor)
+(stop-and-cancel! worker)
 ```
 Function.
 
-Immediately interrupts all in-flight jobs and shuts down the executor.
+Immediately interrupts all in-flight jobs and shuts down the worker.
    In-flight jobs remain in :running state; rescue-stuck-jobs will requeue them.
-   Use stop-executor! instead when you want to wait for jobs to finish gracefully.
+   Use stop-worker! instead when you want to wait for jobs to finish gracefully.
 <p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L431-L436">Source</a></sub></p>
 
-## <a name="s-exp.drip/stop-executor!">`stop-executor!`</a>
+## <a name="s-exp.drip/stop-worker!">`stop-worker!`</a>
 ``` clojure
 
-(stop-executor! executor)
-(stop-executor! executor timeout-ms)
+(stop-worker! worker)
+(stop-worker! worker timeout-ms)
 ```
 Function.
 
-Gracefully stops the executor. Optional second arg: timeout-ms (default 30000).
+Gracefully stops the worker. Optional second arg: timeout-ms (default 30000).
 <p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L424-L429">Source</a></sub></p>
 
-## <a name="s-exp.drip/stop-periodic-executor!">`stop-periodic-executor!`</a>
+## <a name="s-exp.drip/stop-periodic-jobs!">`stop-periodic-jobs!`</a>
 ``` clojure
 
-(stop-periodic-executor! scheduler)
+(stop-periodic-jobs! scheduler)
 ```
 Function.
 
@@ -1474,10 +1474,10 @@ Converts a collection of state keywords to an integer bitmask.
 
 
 
-## <a name="s-exp.drip.periodic/start-periodic-executor!">`start-periodic-executor!`</a>
+## <a name="s-exp.drip.periodic/start-periodic-jobs!">`start-periodic-jobs!`</a>
 ``` clojure
 
-(start-periodic-executor! c specs)
+(start-periodic-jobs! c specs)
 ```
 Function.
 
@@ -1493,13 +1493,13 @@ Schedules periodic job insertions for a sequence of spec maps.
      :opts   - extra insert opts map or nil
 
    `client` is a Client record (from make-client).
-   Returns a ScheduledExecutorService. Stop with stop-periodic-executor!.
+   Returns a ScheduledExecutorService. Stop with stop-periodic-jobs!.
 <p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/periodic.clj#L24-L58">Source</a></sub></p>
 
-## <a name="s-exp.drip.periodic/stop-periodic-executor!">`stop-periodic-executor!`</a>
+## <a name="s-exp.drip.periodic/stop-periodic-jobs!">`stop-periodic-jobs!`</a>
 ``` clojure
 
-(stop-periodic-executor! scheduler)
+(stop-periodic-jobs! scheduler)
 ```
 Function.
 
@@ -1520,10 +1520,10 @@ Shuts down the periodic executor.
 
 <p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/worker.clj#L87-L90">Source</a></sub></p>
 
-## <a name="s-exp.drip.worker/start-executor!">`start-executor!`</a>
+## <a name="s-exp.drip.worker/start-worker!">`start-worker!`</a>
 ``` clojure
 
-(start-executor!
+(start-worker!
  {:keys
   [client registry retry-policies job-timeouts queues concurrency poll-interval-ms worker-id rescue-after retention],
   :or
@@ -1537,7 +1537,7 @@ Shuts down the periodic executor.
 ```
 Function.
 
-Starts a job executor that polls queues and dispatches jobs to workers.
+Starts a job worker that polls queues and dispatches jobs to handlers.
 
    Required options:
      :client    - client from s-exp.drip.client.mariadb/make-client (or postgres/sqlite)
@@ -1592,7 +1592,7 @@ Starts a job executor that polls queues and dispatches jobs to workers.
    On PostgreSQL, a LISTEN connection is started automatically; inserts from
    other processes trigger an immediate poll instead of waiting for the interval.
 
-   Returns an Executor record. Stop with stop-executor!.
+   Returns an Executor record. Stop with stop-worker!.
 <p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/worker.clj#L163-L273">Source</a></sub></p>
 
 ## <a name="s-exp.drip.worker/stop-and-cancel!">`stop-and-cancel!`</a>
@@ -1604,19 +1604,19 @@ Function.
 
 Immediately cancels all in-flight jobs by interrupting their threads, then shuts down.
    In-flight jobs remain in :running state and will be rescued by rescue-stuck-jobs on the
-   next executor startup (or via the periodic rescue in another running executor).
+   next worker startup (or via the periodic rescue in another running worker).
    Returns the list of cancelled Futures from shutdownNow.
 <p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/worker.clj#L294-L306">Source</a></sub></p>
 
-## <a name="s-exp.drip.worker/stop-executor!">`stop-executor!`</a>
+## <a name="s-exp.drip.worker/stop-worker!">`stop-worker!`</a>
 ``` clojure
 
-(stop-executor! executor)
-(stop-executor! {:keys [client task-executor scheduler listener running?]} timeout-ms)
+(stop-worker! worker)
+(stop-worker! {:keys [client task-executor scheduler listener running?]} timeout-ms)
 ```
 Function.
 
-Gracefully shuts down the executor.
+Gracefully shuts down the worker.
    Waits up to timeout-ms for in-flight jobs to finish (default 30s).
    Returns true if clean shutdown, false if timed out.
 <p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/worker.clj#L275-L292">Source</a></sub></p>

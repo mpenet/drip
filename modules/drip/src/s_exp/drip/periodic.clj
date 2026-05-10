@@ -21,7 +21,7 @@
            {:queue (or (:queue spec) "default")
             :unique-opts (periodic-unique-opts ms (:queue spec))})))
 
-(defn start-periodic-executor!
+(defn start-periodic-jobs!
   "Schedules periodic job insertions for a sequence of spec maps.
    Each spec fires at the start of every period interval.
    Duplicate insertions within a period are silently discarded (unique key conflict).
@@ -34,7 +34,7 @@
      :opts   - extra insert opts map or nil
 
    `client` is a Client record (from make-client).
-   Returns a ScheduledExecutorService. Stop with stop-periodic-executor!."
+   Returns a ScheduledExecutorService. Stop with stop-periodic-jobs!."
   [c specs]
   (let [scheduler (Executors/newScheduledThreadPool (int (max 1 (count specs))))]
     (doseq [{:keys [kind args period] :as spec} specs]
@@ -57,7 +57,7 @@
        TimeUnit/MILLISECONDS))
     scheduler))
 
-(defn stop-periodic-executor!
+(defn stop-periodic-jobs!
   "Shuts down the periodic executor."
   [^ScheduledExecutorService scheduler]
   (.shutdown scheduler))

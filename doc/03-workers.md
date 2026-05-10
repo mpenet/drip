@@ -1,8 +1,8 @@
-# Workers and the Executor
+# Workers
 
 ## Overview
 
-The executor is a background process that polls queues, claims jobs atomically, dispatches them to worker functions, and manages their lifecycle (completion, retries, cleanup). Start one with `start-executor!` and stop it with `stop-executor!`.
+The worker is a background process that polls queues, claims jobs atomically, dispatches them to handler functions, and manages their lifecycle (completion, retries, cleanup). Start one with `start-worker!` and stop it with `stop-worker!`.
 
 ## Registry
 
@@ -26,11 +26,11 @@ A handler is a plain function of two arguments: `[client job]`.
 - Handlers must explicitly call `complete-job!`, `snooze-job!`, etc. to manage job state.
 - Throw any `Throwable` → worker records the error and retries (or discards).
 
-## Starting the executor
+## Starting the worker
 
 ```clojure
-(def executor
-  (drip/start-executor!
+(def worker
+  (drip/start-worker!
     {:client   client
      :registry registry}))
 ```
@@ -38,7 +38,7 @@ A handler is a plain function of two arguments: `[client job]`.
 ### All options
 
 ```clojure
-(drip/start-executor!
+(drip/start-worker!
   {:client           client       ; required
    :registry         registry     ; required
 
@@ -63,15 +63,15 @@ A handler is a plain function of two arguments: `[client job]`.
 
 Rescue, retention, and reindex are handled by the [maintenance worker](#maintenance-worker).
 
-## Stopping the executor
+## Stopping the worker
 
 ### Graceful shutdown
 
 Waits for in-flight jobs to finish, up to a timeout:
 
 ```clojure
-(drip/stop-executor! executor)          ; default 30s timeout
-(drip/stop-executor! executor 60000)    ; custom timeout in ms
+(drip/stop-worker! executor)          ; default 30s timeout
+(drip/stop-worker! executor 60000)    ; custom timeout in ms
 ;; returns true if clean, false if timed out
 ```
 
@@ -91,8 +91,8 @@ Use this for fast deploys where you can afford jobs to re-run.
 
 ## How jobs are processed
 
-1. Every `:poll-interval-ms` milliseconds, the executor calls `promote-scheduled-jobs!` (moves scheduled/retryable jobs whose time has come to `:available`).
-2. For each queue, the executor claims up to `concurrency` available jobs atomically (using `FOR UPDATE SKIP LOCKED`), setting their state to `:running`.
+1. Every `:poll-interval-ms` milliseconds, the worker calls `promote-scheduled-jobs!` (moves scheduled/retryable jobs whose time has come to `:available`).
+2. For each queue, the worker claims up to `concurrency` available jobs atomically (using `FOR UPDATE SKIP LOCKED`), setting their state to `:running`.
 3. Each job is dispatched to a virtual thread. The semaphore ensures no more than `concurrency` jobs run simultaneously across all queues.
 4. On handler success: job → `:completed`.
 5. On handler exception: error is recorded; if `attempt < max_attempts`, job → `:retryable` with `scheduled_at` set by retry policy; otherwise → `:discarded`.
@@ -174,7 +174,7 @@ Any function `(fn [attempt] java.time.Instant)` works as a policy:
 Use `:retry-policies` with a `:default` key for the global policy and kind-string keys for per-kind overrides:
 
 ```clojure
-(drip/start-executor!
+(drip/start-worker!
   {:client         client
    :registry       registry
    :retry-policies {:default   (drip/exponential-retry-policy "5s" :multiplier 2.0 :max "1h")
@@ -187,7 +187,7 @@ Use `:retry-policies` with a `:default` key for the global policy and kind-strin
 Limit how long a single job can run. When exceeded, the job thread is interrupted and the job is retried or discarded:
 
 ```clojure
-(drip/start-executor!
+(drip/start-worker!
   {:client     client
    :registry   registry
    :job-timeouts {:default       "30s"  ; 30s for all jobs (nil = no timeout)
@@ -262,26 +262,26 @@ Returns `{index-name-keyword => :reindexed | :skipped | :not-found}` per run (lo
 
 ## PostgreSQL LISTEN/NOTIFY
 
-On PostgreSQL, the executor automatically opens a second connection that LISTENs on the `drip_insert` channel. When any process inserts a job, `pg_notify` fires and the executor polls immediately instead of waiting for the next `:poll-interval-ms`. This reduces job latency to near-zero.
+On PostgreSQL, the worker automatically opens a second connection that LISTENs on the `drip_insert` channel. When any process inserts a job, `pg_notify` fires and the worker polls immediately instead of waiting for the next `:poll-interval-ms`. This reduces job latency to near-zero.
 
 No configuration needed — it happens automatically for PostgreSQL clients.
 
-## Multiple executors
+## Multiple workers
 
-You can run multiple executors in the same process, or across multiple processes, against the same database. They coordinate through the database: `FOR UPDATE SKIP LOCKED` ensures each job is claimed by exactly one worker.
+You can run multiple workers in the same process, or across multiple processes, against the same database. They coordinate through the database: `FOR UPDATE SKIP LOCKED` ensures each job is claimed by exactly one worker.
 
 ```clojure
-;; Separate executors for different queues with different concurrency
-(def critical-executor
-  (drip/start-executor!
+;; Separate workers for different queues with different concurrency
+(def critical-worker
+  (drip/start-worker!
     {:client      client
      :registry    registry
      :queues      ["critical"]
      :concurrency 5
      :worker-id   "critical-worker"}))
 
-(def bulk-executor
-  (drip/start-executor!
+(def bulk-worker
+  (drip/start-worker!
     {:client      client
      :registry    registry
      :queues      ["bulk"]
@@ -289,11 +289,11 @@ You can run multiple executors in the same process, or across multiple processes
      :worker-id   "bulk-worker"}))
 ```
 
-Each executor maintains its own semaphore and scheduler. Any live maintenance worker can rescue orphaned jobs from a crashed process — rescue operates across all workers, not just the one that originally claimed the job.
+Each worker maintains its own semaphore and scheduler. Any live maintenance worker can rescue orphaned jobs from a crashed process — rescue operates across all workers, not just the one that originally claimed the job.
 
 ## Unknown job kinds
 
-If a job is fetched whose `:kind` is not in the registry, the executor calls `discard-job!` — the job is moved to `:discarded` without consuming a retry. This handles kind renames, dead code removal, and deployment skew.
+If a job is fetched whose `:kind` is not in the registry, the worker calls `discard-job!` — the job is moved to `:discarded` without consuming a retry. This handles kind renames, dead code removal, and deployment skew.
 
 ## Explicit state management
 

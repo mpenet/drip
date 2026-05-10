@@ -126,9 +126,9 @@ Full documentation is in the [`doc/`](doc/) directory:
 ;; 2. Run migrations (idempotent, safe to call on every startup)
 (drip/migrate! client)
 
-;; 3. Start the executor
-(def executor
-  (drip/start-executor!
+;; 3. Start the worker
+(def worker
+  (drip/start-worker!
     {:client   client
      :registry {"send_email" (fn [_ job] (send-email! (:args job)))}
      :queues   ["default" "priority"]}))
@@ -137,7 +137,7 @@ Full documentation is in the [`doc/`](doc/) directory:
 (drip/insert-job client "send_email" {:to "user@example.com"})
 
 ;; 5. Stop on shutdown
-(drip/stop-executor! executor)
+(drip/stop-worker! worker)
 ```
 
 ## Transactional insertion
@@ -251,7 +251,7 @@ A second insert within the same window throws a constraint violation. Periodic j
 
 ### Workers
 
-Registry values are functions of two arguments: `[client job]`. Handlers must explicitly manage job state — call `complete-job!`, `snooze-job!`, etc. Throw any `Throwable` to signal failure — the executor records the error and schedules a retry (or discards when max attempts is reached).
+Registry values are functions of two arguments: `[client job]`. Handlers must explicitly manage job state — call `complete-job!`, `snooze-job!`, etc. Throw any `Throwable` to signal failure — the worker records the error and schedules a retry (or discards when max attempts is reached).
 
 ```clojure
 ;; Minimal handler — call complete-job! explicitly
@@ -294,7 +294,7 @@ Persist a handler's result into the job's `metadata` column under the `"output"`
 ### Executor options
 
 ```clojure
-(drip/start-executor!
+(drip/start-worker!
   {:client           client         ; required
    :registry         {...}          ; required, {kind-string (fn [client job] ...)}
    :queues           ["default"]    ; queues to consume (default ["default"])
@@ -370,7 +370,7 @@ drip/default-retry-policy
 Use `:retry-policies` with a `:default` key and per-kind overrides:
 
 ```clojure
-(drip/start-executor!
+(drip/start-worker!
   {:client  client
    :registry {"slow_job" slow-handler
               "fast_job" fast-handler}
@@ -398,7 +398,7 @@ Use `:retry-policies` with a `:default` key and per-kind overrides:
 
 ```clojure
 (def scheduler
-  (drip/start-periodic-executor! client
+  (drip/start-periodic-jobs! client
     [{:kind   "daily_report"
       :args   {:type "summary"}
       :period "24h"          ; ms number or string: "1h", "30m", "1d", etc.
@@ -406,7 +406,7 @@ Use `:retry-policies` with a `:default` key and per-kind overrides:
       :opts   nil}]))
 
 ;; On shutdown:
-(drip/stop-periodic-executor! scheduler)
+(drip/stop-periodic-jobs! scheduler)
 ```
 
 One job per period window — duplicate insertions are silently discarded.
@@ -448,7 +448,7 @@ One job per period window — duplicate insertions are silently discarded.
 (drip/swap-job! client tx job-id
   (fn [job] {:metadata (assoc (:metadata job) "retried-by" "admin")}))
 
-;; Fetch jobs (normally done by the executor)
+;; Fetch jobs (normally done by the worker)
 (drip/fetch-jobs client "default" "worker-id" :limit 10)
 (drip/fetch-jobs! client tx "default" "worker-id" {:limit 10})
 ```

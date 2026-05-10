@@ -22,7 +22,7 @@ The metadata map is arbitrary — Drip stores it as JSON and doesn't interpret i
 
 ## Pausing and resuming
 
-A paused queue's jobs remain in the database but the executor skips fetching from it. In-flight jobs already running when the queue is paused will complete normally.
+A paused queue's jobs remain in the database but the worker skips fetching from it. In-flight jobs already running when the queue is paused will complete normally.
 
 ```clojure
 ;; Pause (workers stop fetching new jobs)
@@ -71,7 +71,7 @@ All job operations support filtering by queue:
 An executor can consume multiple queues. All queues share the same `:concurrency` semaphore:
 
 ```clojure
-(drip/start-executor!
+(drip/start-worker!
   {:client      client
    :registry    registry
    :queues      ["critical" "default" "bulk"]
@@ -84,7 +84,7 @@ For true queue-level prioritization, run separate executors with separate concur
 
 ```clojure
 (def critical-executor
-  (drip/start-executor!
+  (drip/start-worker!
     {:client      client
      :registry    registry
      :queues      ["critical"]
@@ -92,7 +92,7 @@ For true queue-level prioritization, run separate executors with separate concur
      :worker-id   "executor-critical"}))
 
 (def default-executor
-  (drip/start-executor!
+  (drip/start-worker!
     {:client      client
      :registry    registry
      :queues      ["default" "bulk"]

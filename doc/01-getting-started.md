@@ -56,9 +56,9 @@ org.xerial/sqlite-jdbc {:mvn/version "3.45.3.0"}
                   (get-in job [:args :subject])
                   (get-in job [:args :body])))})
 
-;; 5. Start the executor
-(def executor
-  (drip/start-executor!
+;; 5. Start the worker
+(def worker
+  (drip/start-worker!
     {:client   client
      :registry registry}))
 
@@ -69,7 +69,7 @@ org.xerial/sqlite-jdbc {:mvn/version "3.45.3.0"}
    :body    "Thanks for signing up."})
 
 ;; 7. Shut down gracefully (waits up to 30s for in-flight jobs)
-(drip/stop-executor! executor)
+(drip/stop-worker! executor)
 ```
 
 ## Creating a client
@@ -106,10 +106,10 @@ A typical component-based startup (works with Component, Integrant etc):
 ;; Start
 (def client   (postgres/make-client ds))
 (drip/migrate! client)
-(def executor (drip/start-executor! {:client client :registry registry}))
+(def worker (drip/start-worker! {:client client :registry registry}))
 
 ;; Stop
-(drip/stop-executor! executor)   ; waits up to 30s for in-flight jobs
+(drip/stop-worker! worker)   ; waits up to 30s for in-flight jobs
 ```
 
 For immediate shutdown that doesn't wait for in-flight jobs:

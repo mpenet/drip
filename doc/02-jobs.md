@@ -184,7 +184,7 @@ Use them for high-throughput fire-and-forget work where you don't need a complet
 The job's handler calls `complete-job!` as usual — the DELETE happens automatically inside `complete-job!`.
 
 ```clojure
-(drip/start-executor!
+(drip/start-worker!
   {:client   client
    :registry {"process_event"
               (fn [client job]

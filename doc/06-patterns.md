@@ -30,7 +30,7 @@ Complete a job atomically with your own writes. Call `complete-job!` inside your
        (drip/complete-job!  client tx (:id job)))))}
 ```
 
-If `charge-card!` throws, the transaction rolls back, the job is not completed, and the handler's exception propagates to the executor — which records the error and retries the job. The payment record and the job completion are atomically committed together.
+If `charge-card!` throws, the transaction rolls back, the job is not completed, and the handler's exception propagates to the worker — which records the error and retries the job. The payment record and the job completion are atomically committed together.
 
 This is the recommended pattern for any handler that writes to the database.
 
@@ -154,7 +154,7 @@ Inject external dependencies via closures:
 
 ;; Wire up
 (def registry (make-registry my-email-client my-stripe-client))
-(def executor (drip/start-executor! {:client client :registry registry}))
+(def worker (drip/start-worker! {:client client :registry registry}))
 ```
 
 ### Via records (Component-friendly)
@@ -197,11 +197,11 @@ The registry just maps kind strings to handler instances — they satisfy IFn so
   component/Lifecycle
   (start [this]
     (assoc this :executor
-      (drip/start-executor!
+      (drip/start-worker!
         {:client   drip-client
          :registry (:registry worker-registry)})))
   (stop [{:keys [executor] :as this}]
-    (drip/stop-executor! executor 30000)
+    (drip/stop-worker! executor 30000)
     (dissoc this :executor)))
 ```
 
@@ -222,7 +222,7 @@ Jobs that exhaust their retry budget move to `:discarded`. Set up a periodic job
                        :args   (:args job)}))))}
 
 ;; Schedule daily review
-(drip/start-periodic-executor! client
+(drip/start-periodic-jobs! client
   [{:kind "review_discarded" :args {} :period "24h"}])
 ```
 
@@ -294,13 +294,13 @@ Jobs are fetched ordered by `(priority ASC, scheduled_at ASC)`, so lower-number 
   component/Lifecycle
   (start [this]
     (assoc this :executor
-      (drip/start-executor!
+      (drip/start-worker!
         {:client      (:client drip-client)
          :registry    (:registry worker-registry)
          :queues      (or queues ["default"])
          :concurrency (or concurrency 10)})))
   (stop [{:keys [executor] :as this}]
-    (drip/stop-executor! executor 30000)
+    (drip/stop-worker! executor 30000)
     (dissoc this :executor)))
 
 (defn make-system [config]
@@ -369,7 +369,7 @@ Use an in-memory SQLite database for fast integration tests:
 (deftest job-enqueued-and-processed-test
   (with-test-db [client]
     (let [processed (atom [])
-          executor  (drip/start-executor!
+          executor  (drip/start-worker!
                       {:client           client
                        :registry         {"work" (fn [_ job]
                                                    (swap! processed conj (:args job)))}
@@ -377,6 +377,6 @@ Use an in-memory SQLite database for fast integration tests:
       (drip/insert-job client "work" {:n 1})
       (drip/insert-job client "work" {:n 2})
       (Thread/sleep 200)
-      (drip/stop-executor! executor 5000)
+      (drip/stop-worker! executor 5000)
       (is (= #{1 2} (set (map :n @processed)))))))
 ```

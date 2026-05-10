@@ -4,7 +4,7 @@
 
 1. [Getting Started](01-getting-started.md) — Installation, client setup, migrations, lifecycle
 2. [Jobs](02-jobs.md) — Inserting, querying, updating, unique constraints, retries
-3. [Workers and the Executor](03-workers.md) — Registry, concurrency, retry policies, timeouts, retention
+3. [Workers](03-workers.md) — Registry, concurrency, retry policies, timeouts, retention
 4. [Queues](04-queues.md) — Pause/resume, multi-queue routing, queue records
 5. [Periodic Jobs](05-periodic-jobs.md) — Fixed-interval scheduling, deduplication, lifecycle
 6. [Patterns](06-patterns.md) — Transactional enqueue, outbox, fanout, chaining, testing

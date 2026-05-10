@@ -8,7 +8,7 @@ Periodic jobs insert a new job on a fixed-interval schedule. Each interval fires
 
 ```clojure
 (def scheduler
-  (drip/start-periodic-executor! client
+  (drip/start-periodic-jobs! client
     [{:kind   "daily_report"
       :args   {:type "summary"}
       :period "24h"
@@ -19,7 +19,7 @@ Periodic jobs insert a new job on a fixed-interval schedule. Each interval fires
       :queue  "maintenance"}]))
 
 ;; On shutdown
-(drip/stop-periodic-executor! scheduler)
+(drip/stop-periodic-jobs! scheduler)
 ```
 
 ## Spec format
@@ -65,7 +65,7 @@ This means:
 ## Multiple periods in one executor
 
 ```clojure
-(drip/start-periodic-executor! client
+(drip/start-periodic-jobs! client
   [{:kind "heartbeat"          :args {} :period "1m"}
    {:kind "hourly_metrics"     :args {} :period "1h"}
    {:kind "daily_digest"       :args {} :period "24h"}
@@ -77,7 +77,7 @@ Each spec gets its own scheduled task in the underlying `ScheduledExecutorServic
 ## With extra options
 
 ```clojure
-(drip/start-periodic-executor! client
+(drip/start-periodic-jobs! client
   [{:kind  "batch_process"
     :args  {:source "s3://bucket/path"}
     :period "6h"
@@ -90,15 +90,15 @@ Each spec gets its own scheduled task in the underlying `ScheduledExecutorServic
 
 ## Lifecycle
 
-`start-periodic-executor!` returns a `java.util.concurrent.ScheduledExecutorService`. Each spec fires at a fixed rate starting immediately (at time 0, then every period thereafter).
+`start-periodic-jobs!` returns a `java.util.concurrent.ScheduledExecutorService`. Each spec fires at a fixed rate starting immediately (at time 0, then every period thereafter).
 
-`stop-periodic-executor!` calls `shutdown` on the scheduler — no more inserts will fire after this returns, but any currently-running insert completes first.
+`stop-periodic-jobs!` calls `shutdown` on the scheduler — no more inserts will fire after this returns, but any currently-running insert completes first.
 
 ```clojure
 ;; Typical startup/shutdown
 (defstate scheduler
-  :start (drip/start-periodic-executor! client specs)
-  :stop  (drip/stop-periodic-executor! scheduler))
+  :start (drip/start-periodic-jobs! client specs)
+  :stop  (drip/stop-periodic-jobs! scheduler))
 ```
 
 ## Periodic jobs vs scheduled jobs
@@ -106,7 +106,7 @@ Each spec gets its own scheduled task in the underlying `ScheduledExecutorServic
 | | Periodic jobs | Scheduled jobs |
 |---|---|---|
 | Trigger | Time interval (recurring) | One-time future instant |
-| Insert | From `start-periodic-executor!` | From `insert-job` with `:scheduled-at` |
+| Insert | From `start-periodic-jobs!` | From `insert-job` with `:scheduled-at` |
 | Dedup | Automatic (unique per period) | Manual (`:unique-opts`) |
 | Use case | Recurring maintenance, reports | Delayed notifications, reminders |
 
@@ -126,16 +126,16 @@ To implement cron-like behaviour (specific times, not just intervals), insert a 
 Periodic and regular executors are independent. A common setup:
 
 ```clojure
-;; Job executor processes work
-(def executor
-  (drip/start-executor!
+;; Worker processes jobs
+(def worker
+  (drip/start-worker!
     {:client   client
      :registry registry
      :queues   ["default" "maintenance"]}))
 
 ;; Periodic executor inserts recurring jobs
 (def scheduler
-  (drip/start-periodic-executor! client
+  (drip/start-periodic-jobs! client
     [{:kind "hourly_cleanup" :args {} :period "1h" :queue "maintenance"}
      {:kind "daily_report"   :args {} :period "24h"}]))
 ```

@@ -14,9 +14,9 @@
      ;; 2. Run migrations (idempotent)
      (drip/migrate! client)
 
-     ;; 3. Start the executor (registry maps kind strings to (fn [client job] ...) fns)
-     (def executor
-       (drip/start-executor!
+     ;; 3. Start the worker (registry maps kind strings to (fn [client job] ...) fns)
+     (def worker
+       (drip/start-worker!
          {:client client
           :registry {\"send_email\" (fn [_ job] (send-email! (:args job)))}
           :queues [\"default\" \"priority\"]}))
@@ -25,7 +25,7 @@
      (drip/insert-job client \"send_email\" {:to \"user@example.com\"})
 
      ;; 5. Stop on shutdown
-     (drip/stop-executor! executor)"
+     (drip/stop-worker! worker)"
   (:require [s-exp.drip.client :as client]
             [s-exp.drip.db :as db]
             [s-exp.drip.job :as job]
@@ -418,9 +418,9 @@
 ;; Worker / Executor
 ;; ---------------------------------------------------------------------------
 
-(defn start-executor!
+(defn start-worker!
   "Starts polling queues and processing jobs.
-   :client and :registry are required. See s-exp.drip.worker/start-executor! for full option docs.
+   :client and :registry are required. See s-exp.drip.worker/start-worker! for full option docs.
 
    Registry handlers receive [client job] as two arguments.
    Handlers must explicitly call complete-job!, snooze-job!, etc. to manage job state.
@@ -432,36 +432,36 @@
 
    For rescue and retention, use start-maintenance-worker! separately."
   [opts]
-  (worker/start-executor! opts))
+  (worker/start-worker! opts))
 
-(defn stop-executor!
-  "Gracefully stops the executor. Optional second arg: timeout-ms (default 30000)."
-  ([executor]
-   (worker/stop-executor! executor))
-  ([executor timeout-ms]
-   (worker/stop-executor! executor timeout-ms)))
+(defn stop-worker!
+  "Gracefully stops the worker. Optional second arg: timeout-ms (default 30000)."
+  ([worker]
+   (worker/stop-worker! worker))
+  ([worker timeout-ms]
+   (worker/stop-worker! worker timeout-ms)))
 
 (defn stop-and-cancel!
-  "Immediately interrupts all in-flight jobs and shuts down the executor.
+  "Immediately interrupts all in-flight jobs and shuts down the worker.
    In-flight jobs remain in :running state; rescue-stuck-jobs will requeue them.
-   Use stop-executor! instead when you want to wait for jobs to finish gracefully."
-  [executor]
-  (worker/stop-and-cancel! executor))
+   Use stop-worker! instead when you want to wait for jobs to finish gracefully."
+  [worker]
+  (worker/stop-and-cancel! worker))
 
 ;; ---------------------------------------------------------------------------
 ;; Periodic jobs
 ;; ---------------------------------------------------------------------------
 
-(defn start-periodic-executor!
+(defn start-periodic-jobs!
   "Schedules periodic job insertions. `specs` is a sequence of PeriodicSpec maps.
-   Returns a scheduler; stop with stop-periodic-executor!."
+   Returns a scheduler; stop with stop-periodic-jobs!."
   [client specs]
-  (periodic/start-periodic-executor! client specs))
+  (periodic/start-periodic-jobs! client specs))
 
-(defn stop-periodic-executor!
+(defn stop-periodic-jobs!
   "Stops the periodic job scheduler."
   [scheduler]
-  (periodic/stop-periodic-executor! scheduler))
+  (periodic/stop-periodic-jobs! scheduler))
 
 ;; ---------------------------------------------------------------------------
 ;; Retry policy

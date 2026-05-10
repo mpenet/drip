@@ -114,8 +114,8 @@
             listener
             running?])
 
-(defn start-executor!
-  "Starts a job executor that polls queues and dispatches jobs to workers.
+(defn start-worker!
+  "Starts a job worker that polls queues and dispatches jobs to handlers.
 
    Required options:
      :client    - client from s-exp.drip.client.mariadb/make-client (or postgres/sqlite)
@@ -152,7 +152,7 @@
    On PostgreSQL, a LISTEN connection is started automatically; inserts from
    other processes trigger an immediate poll instead of waiting for the interval.
 
-   Returns an Executor record. Stop with stop-executor!."
+   Returns an Executor record. Stop with stop-worker!."
   [{:keys [client registry retry-policies job-timeouts queues
            concurrency poll-interval-ms worker-id]
     :or {queues ["default"]
@@ -202,12 +202,12 @@
       :listener listener
       :running? running?})))
 
-(defn stop-executor!
-  "Gracefully shuts down the executor.
+(defn stop-worker!
+  "Gracefully shuts down the worker.
    Waits up to timeout-ms for in-flight jobs to finish (default 30s).
    Returns true if clean shutdown, false if timed out."
   ([executor]
-   (stop-executor! executor 30000))
+   (stop-worker! executor 30000))
   ([{:keys [client
             ^ExecutorService task-executor
             ^ScheduledExecutorService scheduler
@@ -224,7 +224,7 @@
 (defn stop-and-cancel!
   "Immediately cancels all in-flight jobs by interrupting their threads, then shuts down.
    In-flight jobs remain in :running state and will be rescued by rescue-stuck-jobs on the
-   next executor startup (or via the periodic rescue in another running executor).
+   next worker startup (or via the periodic rescue in another running worker).
    Returns the list of cancelled Futures from shutdownNow."
   [{:keys [client
            ^ExecutorService task-executor
