@@ -96,10 +96,10 @@
       (catch Exception t (log/error t "drip: poll-queue error" {:queue q})))))
 
 ;; ---------------------------------------------------------------------------
-;; Executor record and lifecycle
+;; Worker record and lifecycle
 ;; ---------------------------------------------------------------------------
 
-(defrecord Executor
+(defrecord Worker
            [client
             registry
             retry-policies
@@ -152,7 +152,7 @@
    On PostgreSQL, a LISTEN connection is started automatically; inserts from
    other processes trigger an immediate poll instead of waiting for the interval.
 
-   Returns an Executor record. Stop with stop-worker!."
+   Returns a Worker record. Stop with stop-worker!."
   [{:keys [client registry retry-policies job-timeouts queues
            concurrency poll-interval-ms worker-id]
     :or {queues ["default"]
@@ -187,7 +187,7 @@
      0
      (long poll-interval-ms)
      TimeUnit/MILLISECONDS)
-    (map->Executor
+    (map->Worker
      {:client client
       :registry registry
       :retry-policies retry-policies

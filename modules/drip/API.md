@@ -121,7 +121,6 @@
     -  [`start-periodic-jobs!`](#s-exp.drip.periodic/start-periodic-jobs!) - Schedules periodic job insertions for a sequence of spec maps.
     -  [`stop-periodic-jobs!`](#s-exp.drip.periodic/stop-periodic-jobs!) - Shuts down the periodic executor.
 -  [`s-exp.drip.worker`](#s-exp.drip.worker) 
-    -  [`default-retention`](#s-exp.drip.worker/default-retention)
     -  [`start-worker!`](#s-exp.drip.worker/start-worker!) - Starts a job worker that polls queues and dispatches jobs to handlers.
     -  [`stop-and-cancel!`](#s-exp.drip.worker/stop-and-cancel!) - Immediately cancels all in-flight jobs by interrupting their threads, then shuts down.
     -  [`stop-worker!`](#s-exp.drip.worker/stop-worker!) - Gracefully shuts down the worker.
@@ -1514,26 +1513,18 @@ Shuts down the periodic executor.
 
 
 
-## <a name="s-exp.drip.worker/default-retention">`default-retention`</a>
-
-
-
-<p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/worker.clj#L87-L90">Source</a></sub></p>
-
 ## <a name="s-exp.drip.worker/start-worker!">`start-worker!`</a>
 ``` clojure
 
 (start-worker!
  {:keys
-  [client registry retry-policies job-timeouts queues concurrency poll-interval-ms worker-id rescue-after retention],
+  [client registry retry-policies job-timeouts queues concurrency poll-interval-ms worker-id],
   :or
   {queues ["default"],
    concurrency 10,
    poll-interval-ms 1000,
    retry-policies {:default job/default-retry-policy},
-   job-timeouts {:default nil},
-   rescue-after {:default "1h"},
-   retention {:default default-retention}}})
+   job-timeouts {:default nil}}})
 ```
 Function.
 
@@ -1570,29 +1561,10 @@ Starts a job worker that polls queues and dispatches jobs to handlers.
                           Example: {:default 30000
                                     "slow_report" 120000
                                     "quick_notify" 5000}
-     :rescue-after      - unified rescue config map. :default is the global stuck threshold;
-                          queue-name string keys override per queue. Each value is a duration:
-                          ms number or duration string (e.g. "1h", "30m").
-                          Set :default to nil to disable global rescue. Set :rescue-after nil
-                          to disable rescue entirely.
-                          Default: {:default "1h"}
-                          Example: {:default "1h" "slow" "4h" "fast" "15m"}
-     :retention         - unified retention config map. Keys are either :default (the global
-                          {state → ms} map) or queue-name strings (per-queue {state → ms} overrides).
-                          Per-queue entries are merged on top of :default for that queue.
-                          Set a state to nil to disable cleanup for it. Set :retention nil to
-                          disable all automatic cleanup.
-                          Default: {:default {:completed 86400000
-                                              :cancelled 86400000
-                                              :discarded 604800000}}
-                          Example: {:default  {:completed 86400000 :discarded 604800000}
-                                    "fast"    {:completed 3600000}
-                                    "archive" {:discarded nil}}
-
    On PostgreSQL, a LISTEN connection is started automatically; inserts from
    other processes trigger an immediate poll instead of waiting for the interval.
 
-   Returns an Executor record. Stop with stop-worker!.
+   Returns a Worker record. Stop with stop-worker!.
 <p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/worker.clj#L163-L273">Source</a></sub></p>
 
 ## <a name="s-exp.drip.worker/stop-and-cancel!">`stop-and-cancel!`</a>
