@@ -25,14 +25,32 @@ Every job is returned as a Clojure map (defrecord) with these fields:
 
 ## Job states
 
-```
-available  → running → completed           (normal path)
-                     → retryable           (attempt failed, retries remain)
-                     → discarded           (max attempts reached)
-                     → cancelled           (manually cancelled)
-scheduled  → available                     (when scheduled_at <= now)
-pending    → available | scheduled | cancelled
-retryable  → available                     (after backoff delay)
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> available : insert (now)
+    [*] --> scheduled : insert (future scheduled-at)
+    [*] --> pending   : insert (unique, unresolved)
+
+    pending   --> available  : resolved
+    pending   --> scheduled  : resolved (future)
+    pending   --> cancelled  : cancel
+
+    scheduled --> available  : scheduled_at ≤ now
+
+    available --> running    : claimed by worker
+
+    running   --> completed  : complete-job!
+    running   --> retryable  : fail, retries remain
+    running   --> discarded  : fail, exhausted
+    running   --> scheduled  : snooze-job!
+    running   --> cancelled  : cancel-job!
+
+    retryable --> available  : backoff elapsed
+
+    completed --> [*]
+    discarded --> [*]
+    cancelled --> [*]
 ```
 
 States in the `:state` field are keywords: `:available`, `:running`, `:completed`, `:retryable`, `:discarded`, `:cancelled`, `:scheduled`, `:pending`.

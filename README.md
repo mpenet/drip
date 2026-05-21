@@ -190,13 +190,32 @@ Enqueue multiple jobs in a single transaction:
 
 ### Job states
 
-```
-available → running → completed
-                    → retryable → available (after backoff)
-                                → discarded (max attempts reached)
-                    → cancelled
-scheduled → available (when scheduled_at <= now)
-pending   → available | scheduled | cancelled
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> available : insert (now)
+    [*] --> scheduled : insert (future scheduled-at)
+    [*] --> pending   : insert (unique, unresolved)
+
+    pending   --> available  : resolved
+    pending   --> scheduled  : resolved (future)
+    pending   --> cancelled  : cancel
+
+    scheduled --> available  : scheduled_at ≤ now
+
+    available --> running    : claimed by worker
+
+    running   --> completed  : complete-job!
+    running   --> retryable  : fail, retries remain
+    running   --> discarded  : fail, exhausted
+    running   --> scheduled  : snooze-job!
+    running   --> cancelled  : cancel-job!
+
+    retryable --> available  : backoff elapsed
+
+    completed --> [*]
+    discarded --> [*]
+    cancelled --> [*]
 ```
 
 ### Client

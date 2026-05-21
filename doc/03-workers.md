@@ -104,6 +104,18 @@ Use this for fast deploys where you can afford jobs to re-run.
 5. On handler exception: error is recorded; if `attempt < max_attempts`, job → `:retryable` with `scheduled_at` set by retry policy; otherwise → `:discarded`.
 6. On timeout: job thread is interrupted and job → `:retryable`/`:discarded`.
 
+```mermaid
+flowchart LR
+    avail[:available] -->|worker claims| run[:running]
+    run -->|handler returns| done[:completed]
+    run -->|handler throws| check{attempts\nremain?}
+    check -->|yes| policy[retry policy\ncomputes delay]
+    policy --> retry[:retryable]
+    retry -->|backoff elapsed| avail
+    check -->|no| disc[:discarded]
+    run -->|timeout| check
+```
+
 ## Concurrency
 
 `:concurrency` controls the maximum number of simultaneously in-flight jobs across all queues. It is implemented as a semaphore that also gates how many jobs are fetched from the database, preventing over-claiming.
