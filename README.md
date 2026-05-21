@@ -241,9 +241,9 @@ Prevent duplicate jobs using `:unique-opts`:
 ```clojure
 (drip/insert-job client "report" {:period "daily"}
   :unique-opts
-  {:by-args?  true                     ; distinct per args value
+  {:by-args  true                     ; distinct per args value
    :by-period "24h"                    ; one per 24h window
-   :by-queue? true                     ; scope to queue
+   :by-queue true                     ; scope to queue
    :by-state  #{:available :pending :running :scheduled :retryable}})
 ```
 
@@ -299,7 +299,7 @@ Persist a handler's result into the job's `metadata` column under the `"output"`
    :registry         {...}          ; required, {kind-string (fn [client job] ...)}
    :queues           ["default"]    ; queues to consume (default ["default"])
    :concurrency      10             ; max simultaneous in-flight jobs (default 10)
-   :poll-interval-ms 1000           ; polling interval in ms (default 1000)
+   :poll-interval    "1s"           ; polling interval (default "1s")
    :worker-id        "my-worker-1"  ; unique ID (default: random UUID)
    :retry-policies   {:default  my-policy              ; default: exponential backoff (1s, x2, max 1h, ±10%)
                       "my_kind" fast-retry-policy}    ; per-kind overrides

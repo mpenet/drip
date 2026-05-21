@@ -49,7 +49,7 @@ A handler is a plain function of two arguments: `[client job]`.
    :concurrency      10           ; max simultaneous in-flight jobs (default 10)
 
    ;; Polling
-   :poll-interval-ms 1000         ; ms between polls (default 1000)
+   :poll-interval "1s"            ; interval between polls (default "1s")
    :worker-id        "worker-1"   ; unique ID for this executor (default random UUID)
 
    ;; Retries
@@ -70,8 +70,8 @@ Rescue, retention, and reindex are handled by the [maintenance worker](#maintena
 Waits for in-flight jobs to finish, up to a timeout:
 
 ```clojure
-(drip/stop-worker! executor)          ; default 30s timeout
-(drip/stop-worker! executor 60000)    ; custom timeout in ms
+(drip/stop-worker! executor)                     ; default 30s timeout
+(drip/stop-worker! executor :timeout "60s")      ; custom timeout
 ;; returns true if clean, false if timed out
 ```
 
@@ -91,7 +91,7 @@ Use this for fast deploys where you can afford jobs to re-run.
 
 ## How jobs are processed
 
-1. Every `:poll-interval-ms` milliseconds, the worker calls `promote-scheduled-jobs!` (moves scheduled/retryable jobs whose time has come to `:available`).
+1. Every `:poll-interval`, the worker calls `promote-scheduled-jobs!` (moves scheduled/retryable jobs whose time has come to `:available`).
 2. For each queue, the worker claims up to `concurrency` available jobs atomically (using `FOR UPDATE SKIP LOCKED`), setting their state to `:running`.
 3. Each job is dispatched to a virtual thread. The semaphore ensures no more than `concurrency` jobs run simultaneously across all queues.
 4. On handler success: job → `:completed`.
@@ -262,7 +262,7 @@ Returns `{index-name-keyword => :reindexed | :skipped | :not-found}` per run (lo
 
 ## PostgreSQL LISTEN/NOTIFY
 
-On PostgreSQL, the worker automatically opens a second connection that LISTENs on the `drip_insert` channel. When any process inserts a job, `pg_notify` fires and the worker polls immediately instead of waiting for the next `:poll-interval-ms`. This reduces job latency to near-zero.
+On PostgreSQL, the worker automatically opens a second connection that LISTENs on the `drip_insert` channel. When any process inserts a job, `pg_notify` fires and the worker polls immediately instead of waiting for the next `:poll-interval`. This reduces job latency to near-zero.
 
 No configuration needed — it happens automatically for PostgreSQL clients.
 

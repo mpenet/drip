@@ -24,7 +24,7 @@
           executor (worker/start-worker!
                     {:client *client*
                      :registry registry
-                     :poll-interval-ms 50})]
+                     :poll-interval 50})]
       (try
         (drip/insert-job *client* "work_item" {:val 42} nil)
         (Thread/sleep 500)
@@ -32,7 +32,7 @@
         (let [jobs (drip/list-jobs *client* {:kind "work_item" :state :completed})]
           (is (= 1 (count jobs))))
         (finally
-          (worker/stop-worker! executor 5000))))))
+          (worker/stop-worker! executor :timeout "5s"))))))
 
 (deftest worker-handles-failure
   (testing "failing worker records error and marks job :retryable (max-attempts > 1)"
@@ -43,18 +43,18 @@
           executor (worker/start-worker!
                     {:client *client*
                      :registry registry
-                     :poll-interval-ms 50})]
+                     :poll-interval 50})]
       (try
         (drip/insert-job *client* "fail_work" {} {:max-attempts 3})
         (deref processed 5000 nil)
-        (worker/stop-worker! executor 5000)
+        (worker/stop-worker! executor :timeout "5s")
         (let [job (first (drip/list-jobs *client* {:kind "fail_work"}))]
           (is (some? job))
           (is (contains? #{:retryable :available} (:state job)))
           (is (>= (count (:errors job)) 1))
           (is (= "intentional" (:error (first (:errors job))))))
         (finally
-          (try (worker/stop-worker! executor 1000) (catch Exception _ nil)))))))
+          (try (worker/stop-worker! executor :timeout "1s") (catch Exception _ nil)))))))
 
 (deftest worker-discards-unknown-kind
   (testing "job with no matching worker is discarded"
@@ -62,14 +62,14 @@
           executor (worker/start-worker!
                     {:client *client*
                      :registry registry
-                     :poll-interval-ms 50})]
+                     :poll-interval 50})]
       (try
         (drip/insert-job *client* "unknown_kind" {} nil)
         (Thread/sleep 500)
         (let [jobs (drip/list-jobs *client* {:kind "unknown_kind" :state :discarded})]
           (is (= 1 (count jobs))))
         (finally
-          (worker/stop-worker! executor 5000))))))
+          (worker/stop-worker! executor :timeout "5s"))))))
 
 (deftest worker-concurrency-semaphore
   (testing "semaphore limits concurrency and all jobs eventually complete"
@@ -84,15 +84,15 @@
                     {:client *client*
                      :registry registry
                      :concurrency 3
-                     :poll-interval-ms 50})]
+                     :poll-interval 50})]
       (try
         (dotimes [_ total] (drip/insert-job *client* "conc_work" {} nil))
         (deref done 10000 nil)
-        (worker/stop-worker! executor 5000)
+        (worker/stop-worker! executor :timeout "5s")
         (let [jobs (drip/list-jobs *client* {:kind "conc_work" :state :completed})]
           (is (= total (count jobs))))
         (finally
-          (try (worker/stop-worker! executor 1000) (catch Exception _ nil)))))))
+          (try (worker/stop-worker! executor :timeout "1s") (catch Exception _ nil)))))))
 
 (deftest worker-picks-up-pre-inserted-job
   (testing "job inserted before executor start is processed"
@@ -101,11 +101,11 @@
           executor (worker/start-worker!
                     {:client *client*
                      :registry {"pre_insert" (fn [_ _job] (deliver done true))}
-                     :poll-interval-ms 50})]
+                     :poll-interval 50})]
       (try
         (is (deref done 5000 false))
         (finally
-          (worker/stop-worker! executor 5000))))))
+          (worker/stop-worker! executor :timeout "5s"))))))
 
 (deftest worker-graceful-shutdown
   (testing "stop-worker! returns after in-flight jobs finish"
@@ -117,10 +117,10 @@
                                              (deliver started true)
                                              (Thread/sleep 200)
                                              (reset! finished true))}
-                     :poll-interval-ms 50})]
+                     :poll-interval 50})]
       (drip/insert-job *client* "slow_job" {} nil)
       (deref started 5000 nil)
-      (worker/stop-worker! executor 5000)
+      (worker/stop-worker! executor :timeout "5s")
       (is @finished))))
 
 (deftest stop-and-cancel-test
@@ -131,7 +131,7 @@
                      :registry {"cancel_job" (fn [_ _job]
                                                (deliver started true)
                                                (Thread/sleep 10000))}
-                     :poll-interval-ms 50})]
+                     :poll-interval 50})]
       (drip/insert-job *client* "cancel_job" {} nil)
       (deref started 5000 nil)
       (drip/stop-and-cancel! executor)
@@ -160,9 +160,9 @@
 (deftest periodic-executor-dedup
   (testing "duplicate insertions within period conflict"
     (let [unique-opts {:unique-opts
-                       {:by-args? false
+                       {:by-args false
                         :by-period "1h"
-                        :by-queue? true
+                        :by-queue true
                         :by-state job/default-unique-states}}]
       (drip/insert-job *client* "dedup_test" {} (merge {:queue "default"} unique-opts))
       (is (thrown? Exception
@@ -249,10 +249,10 @@
                :registry {}
                :retry-policies {:default drip/default-retry-policy
                                 "my_kind" custom-policy}
-               :poll-interval-ms 999999})]
+               :poll-interval 999999})]
       (is (= custom-policy (get (:retry-policies ex) "my_kind")))
       (is (= drip/default-retry-policy (get (:retry-policies ex) :default)))
-      (drip/stop-worker! ex 1000))))
+      (drip/stop-worker! ex :timeout "1s"))))
 
 (deftest job-timeout-test
   (testing "timed-out job is failed with timeout error message"
@@ -264,26 +264,26 @@
               {:client *client*
                :registry registry
                :job-timeouts {:default 200}
-               :poll-interval-ms 50})]
+               :poll-interval 50})]
       (try
         (drip/insert-job *client* "timeout_kind" {} nil)
         (deref started 5000 nil)
         (Thread/sleep 500)
-        (worker/stop-worker! ex 5000)
+        (worker/stop-worker! ex :timeout "5s")
         (let [job (first (drip/list-jobs *client* {:kind "timeout_kind"}))]
           (is (some? job))
           (is (contains? #{:retryable :discarded} (:state job)))
           (is (str/includes? (:error (first (:errors job))) "timed out")))
         (finally
-          (try (worker/stop-worker! ex 1000) (catch Exception _ nil))))))
+          (try (worker/stop-worker! ex :timeout "1s") (catch Exception _ nil))))))
   (testing "per-kind timeout stored in executor record"
     (let [ex (drip/start-worker!
               {:client *client*
                :registry {}
                :job-timeouts {"slow_kind" 500}
-               :poll-interval-ms 999999})]
+               :poll-interval 999999})]
       (is (= 500 (get (:job-timeouts ex) "slow_kind")))
-      (drip/stop-worker! ex 1000))))
+      (drip/stop-worker! ex :timeout "1s"))))
 
 (deftest maintenance-worker-rescue-test
   (testing "maintenance worker rescues a stuck running job"
@@ -302,10 +302,10 @@
                :retention nil})]
       (try
         (Thread/sleep 400)
-        (drip/stop-maintenance-worker! mw 5000)
+        (drip/stop-maintenance-worker! mw "5s")
         (is (= :retryable (:state (drip/get-job *client* (:id j)))))
         (finally
-          (try (drip/stop-maintenance-worker! mw 1000) (catch Exception _ nil))))))
+          (try (drip/stop-maintenance-worker! mw "1s") (catch Exception _ nil))))))
 
   (testing ":rescue-after map stored in maintenance worker record"
     (let [mw (drip/start-maintenance-worker!
@@ -315,7 +315,7 @@
                :retention nil})]
       (is (= "2h" (get (:rescue-after mw) :default)))
       (is (= "4h" (get (:rescue-after mw) "slow")))
-      (drip/stop-maintenance-worker! mw 1000))))
+      (drip/stop-maintenance-worker! mw "1s"))))
 
 (deftest handler-receives-client-and-job
   (testing "handler receives client as first arg and job as second"
@@ -324,7 +324,7 @@
                     {:client *client*
                      :registry {"ctx_kind" (fn [client job]
                                              (deliver capture {:client client :job job}))}
-                     :poll-interval-ms 50})]
+                     :poll-interval 50})]
       (try
         (drip/insert-job *client* "ctx_kind" {:x 1} nil)
         (let [{:keys [client job]} (deref capture 5000 nil)]
@@ -333,7 +333,7 @@
           (is (= "ctx_kind" (:kind job)))
           (is (= *client* client)))
         (finally
-          (worker/stop-worker! executor 5000))))))
+          (worker/stop-worker! executor :timeout "5s"))))))
 
 (deftest explicit-complete-in-handler
   (testing "handler calling complete-job! directly marks job completed"
@@ -345,16 +345,16 @@
                                   (drip/with-tx [tx client]
                                     (drip/complete-job! client tx (:id job)))
                                   (deliver done true))}
-                     :poll-interval-ms 50})]
+                     :poll-interval 50})]
       (try
         (drip/insert-job *client* "explicit_complete_kind" {} nil)
         (is (deref done 5000 false))
         (Thread/sleep 100)
-        (worker/stop-worker! executor 5000)
+        (worker/stop-worker! executor :timeout "5s")
         (let [jobs (drip/list-jobs *client* {:kind "explicit_complete_kind" :state :completed})]
           (is (= 1 (count jobs))))
         (finally
-          (try (worker/stop-worker! executor 1000) (catch Exception _ nil)))))))
+          (try (worker/stop-worker! executor :timeout "1s") (catch Exception _ nil)))))))
 
 (deftest outbox-pattern-atomic-completion
   (testing "handler can complete job inside its own tx alongside business writes"
@@ -370,18 +370,18 @@
                                     (drip/complete-job! client tx (:id job)))
                                   (reset! side-effect :done)
                                   (deliver done true))}
-                     :poll-interval-ms 50})]
+                     :poll-interval 50})]
       (try
         (drip/insert-job *client* "outbox_kind" {:payload "data"} nil)
         (is (deref done 5000 false))
         (Thread/sleep 100)
-        (worker/stop-worker! executor 5000)
+        (worker/stop-worker! executor :timeout "5s")
         (let [j (first (drip/list-jobs *client* {:kind "outbox_kind" :state :completed}))]
           (is (some? j))
           (is (= {"processed" true} (:metadata j)))
           (is (= :done @side-effect)))
         (finally
-          (try (worker/stop-worker! executor 1000) (catch Exception _ nil)))))
+          (try (worker/stop-worker! executor :timeout "1s") (catch Exception _ nil)))))
 
     (testing "if handler tx rolls back, job is not completed"
       (let [done (promise)
@@ -396,17 +396,17 @@
                                       (catch Exception e
                                         (deliver done true)
                                         (throw e))))}  ; re-throw so worker calls fail-job!
-                       :poll-interval-ms 50})]
+                       :poll-interval 50})]
         (try
           (drip/insert-job *client* "outbox_rollback" {} {:max-attempts 1})
           (is (deref done 5000 false))
           (Thread/sleep 200)
-          (worker/stop-worker! executor 5000)
+          (worker/stop-worker! executor :timeout "5s")
           (let [j (first (drip/list-jobs *client* {:kind "outbox_rollback"}))]
             (is (some? j))
             (is (= :discarded (:state j))))
           (finally
-            (try (worker/stop-worker! executor 1000) (catch Exception _ nil))))))))
+            (try (worker/stop-worker! executor :timeout "1s") (catch Exception _ nil))))))))
 
 (deftest record-output-stored-in-metadata
   (testing "record-output! merges output into metadata[\"output\"]"
@@ -419,17 +419,17 @@
                                     (drip/record-output! client tx (:id job) {:result 42})
                                     (drip/complete-job! client tx (:id job)))
                                   (deliver done true))}
-                     :poll-interval-ms 50})]
+                     :poll-interval 50})]
       (try
         (drip/insert-job *client* "output_kind" {} nil)
         (is (deref done 5000 false))
         (Thread/sleep 100)
-        (worker/stop-worker! executor 5000)
+        (worker/stop-worker! executor :timeout "5s")
         (let [j (first (drip/list-jobs *client* {:kind "output_kind" :state :completed}))]
           (is (some? j))
           (is (= {"result" 42} (get (:metadata j) "output"))))
         (finally
-          (try (worker/stop-worker! executor 1000) (catch Exception _ nil)))))))
+          (try (worker/stop-worker! executor :timeout "1s") (catch Exception _ nil)))))))
 
 (deftest ephemeral-job-deleted-on-completion
   (testing "ephemeral job is removed from DB immediately after successful completion"
@@ -442,18 +442,18 @@
                                   (drip/with-tx [tx client]
                                     (drip/complete-job! client tx (:id job)))
                                   (deliver done true))}
-                     :poll-interval-ms 50})]
+                     :poll-interval 50})]
       (try
         (let [job (drip/insert-job *client* "ephemeral_kind" {:x 1} {:ephemeral true})]
           (reset! job-id (:id job))
           (is (true? (:ephemeral job))))
         (is (deref done 5000 false))
         (Thread/sleep 100)
-        (worker/stop-worker! executor 5000)
+        (worker/stop-worker! executor :timeout "5s")
         (is (nil? (drip/get-job *client* @job-id)))
         (is (empty? (drip/list-jobs *client* {:kind "ephemeral_kind" :state :completed})))
         (finally
-          (try (worker/stop-worker! executor 1000) (catch Exception _ nil)))))))
+          (try (worker/stop-worker! executor :timeout "1s") (catch Exception _ nil)))))))
 
 (deftest ephemeral-job-failure-retries-normally
   (testing "ephemeral job that fails transitions to :retryable, not deleted"
@@ -464,14 +464,31 @@
                                 (fn [_ _]
                                   (deliver done true)
                                   (throw (RuntimeException. "ephemeral failure")))}
-                     :poll-interval-ms 50})]
+                     :poll-interval 50})]
       (try
         (drip/insert-job *client* "ephemeral_fail_kind" {} {:ephemeral true :max-attempts 3})
         (deref done 5000 nil)
         (Thread/sleep 200)
-        (worker/stop-worker! executor 5000)
+        (worker/stop-worker! executor :timeout "5s")
         (let [jobs (drip/list-jobs *client* {:kind "ephemeral_fail_kind"})]
           (is (= 1 (count jobs)))
           (is (contains? #{:retryable :available} (:state (first jobs)))))
         (finally
-          (try (worker/stop-worker! executor 1000) (catch Exception _ nil)))))))
+          (try (worker/stop-worker! executor :timeout "1s") (catch Exception _ nil)))))))
+
+(deftest drain-mode-waits-for-in-flight-job
+  (testing ":drain true waits for in-flight job to finish before shutdown returns"
+    (let [started (promise)
+          finished (atom false)
+          executor (worker/start-worker!
+                    {:client *client*
+                     :registry {"drain_job"
+                                (fn [_ _job]
+                                  (deliver started true)
+                                  (Thread/sleep 200)
+                                  (reset! finished true))}
+                     :poll-interval 50})]
+      (drip/insert-job *client* "drain_job" {} nil)
+      (deref started 5000 nil)
+      (worker/stop-worker! executor :timeout "5s" :drain true)
+      (is @finished "job should have completed before stop-worker! returned"))))

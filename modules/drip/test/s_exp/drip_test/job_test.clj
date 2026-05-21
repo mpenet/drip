@@ -48,28 +48,28 @@
 
   (testing "non-nil unique-opts returns 32 bytes"
     (let [k (db/compute-unique-key "kind" (db/->json {:x 1}) "q" (Instant/now)
-                                   {:by-args? true :by-period nil
-                                    :by-queue? false :by-state nil})]
+                                   {:by-args true :by-period nil
+                                    :by-queue false :by-state nil})]
       (is (bytes? k))
       (is (= 32 (alength ^bytes k)))))
 
   (testing "same inputs produce same key"
     (let [now (Instant/now)
           args (db/->json {:x 1})
-          opts {:by-args? true :by-period nil :by-queue? false :by-state nil}
+          opts {:by-args true :by-period nil :by-queue false :by-state nil}
           k1 (db/compute-unique-key "kind" args "q" now opts)
           k2 (db/compute-unique-key "kind" args "q" now opts)]
       (is (java.util.Arrays/equals ^bytes k1 ^bytes k2))))
 
   (testing "different args produce different keys"
     (let [now (Instant/now)
-          opts {:by-args? true :by-period nil :by-queue? false :by-state nil}
+          opts {:by-args true :by-period nil :by-queue false :by-state nil}
           k1 (db/compute-unique-key "kind" (db/->json {:x 1}) "q" now opts)
           k2 (db/compute-unique-key "kind" (db/->json {:x 2}) "q" now opts)]
       (is (not (java.util.Arrays/equals ^bytes k1 ^bytes k2)))))
 
   (testing "by-period: keys in same window are equal"
-    (let [opts {:by-args? false :by-period 3600000 :by-queue? false :by-state nil}
+    (let [opts {:by-args false :by-period 3600000 :by-queue false :by-state nil}
           now (Instant/now)
           t2 (.plusSeconds now 1)
           k1 (db/compute-unique-key "k" (db/->json {}) "q" now opts)
@@ -78,7 +78,7 @@
 
   (testing "by-queue: different queues produce different keys"
     (let [now (Instant/now)
-          opts {:by-args? false :by-period nil :by-queue? true :by-state nil}
+          opts {:by-args false :by-period nil :by-queue true :by-state nil}
           k1 (db/compute-unique-key "k" (db/->json {}) "q1" now opts)
           k2 (db/compute-unique-key "k" (db/->json {}) "q2" now opts)]
       (is (not (java.util.Arrays/equals ^bytes k1 ^bytes k2))))))

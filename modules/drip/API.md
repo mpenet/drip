@@ -684,7 +684,7 @@ Starts polling queues and processing jobs.
 
    Key options:
      :retry-policies - {:default policy-fn, "kind" policy-fn} unified retry map
-     :job-timeouts   - {:default timeout-ms, "kind" timeout-ms} unified timeout map (nil = no timeout)
+     :job-timeouts   - {:default timeout, "kind" timeout} unified timeout map; duration string or ms (nil = no timeout)
      :rescue-after   - {:default duration, "queue" duration} unified rescue map (nil or :default nil = disable)
      :retention      - {:default {state → ms}, "queue" {state → ms}} unified retention map
                        Set :retention nil to disable all cleanup.
@@ -717,11 +717,11 @@ Immediately interrupts all in-flight jobs and shuts down the worker.
 ``` clojure
 
 (stop-worker! worker)
-(stop-worker! worker timeout-ms)
+(stop-worker! worker)
 ```
 Function.
 
-Gracefully stops the worker. Optional second arg: timeout-ms (default 30000).
+Gracefully stops the worker. Accepts :timeout (duration string or ms, default "30s") and :drain keyword args.
 <p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip.clj#L424-L429">Source</a></sub></p>
 
 ## <a name="s-exp.drip/stop-periodic-jobs!">`stop-periodic-jobs!`</a>
@@ -1518,11 +1518,11 @@ Shuts down the periodic executor.
 
 (start-worker!
  {:keys
-  [client registry retry-policies job-timeouts queues concurrency poll-interval-ms worker-id],
+  [client registry retry-policies job-timeouts queues concurrency poll-interval worker-id],
   :or
   {queues ["default"],
    concurrency 10,
-   poll-interval-ms 1000,
+   poll-interval "1s",
    retry-policies {:default job/default-retry-policy},
    job-timeouts {:default nil}}})
 ```
@@ -1547,7 +1547,7 @@ Starts a job worker that polls queues and dispatches jobs to handlers.
    Optional options:
      :queues            - vector of queue names to consume (default ["default"])
      :concurrency       - max simultaneous in-flight jobs across all queues (default 10)
-     :poll-interval-ms  - polling interval in milliseconds (default 1000)
+     :poll-interval  - polling interval; duration string or ms (default "1s")
      :worker-id         - unique string ID (default random UUID)
      :retry-policies    - {kind-string retry-policy-fn, :default retry-policy-fn} map.
                           :default is the fallback policy (default: exponential backoff).
@@ -1584,11 +1584,11 @@ Immediately cancels all in-flight jobs by interrupting their threads, then shuts
 ``` clojure
 
 (stop-worker! worker)
-(stop-worker! {:keys [client task-executor scheduler listener running?]} timeout-ms)
+(stop-worker! worker & {:keys [timeout drain]})
 ```
 Function.
 
 Gracefully shuts down the worker.
-   Waits up to timeout-ms for in-flight jobs to finish (default 30s).
+   Waits up to :timeout for in-flight jobs to finish (default "30s").
    Returns true if clean shutdown, false if timed out.
 <p><sub><a href="https://github.com/mpenet/drip/blob/main/modules/drip/src/s_exp/drip/worker.clj#L275-L292">Source</a></sub></p>

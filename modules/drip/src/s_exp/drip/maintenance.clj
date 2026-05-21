@@ -198,22 +198,23 @@
       :running? running?})))
 
 (defn stop-maintenance-worker!
-  "Shuts down the maintenance worker. Waits up to timeout-ms (default 5000)
-   for any in-progress task to finish. Returns true if all schedulers shut down
-   cleanly, false if any timed out."
+  "Shuts down the maintenance worker. Waits up to timeout (default \"5s\") for any
+   in-progress task to finish. timeout accepts a duration string or ms number.
+   Returns true if all schedulers shut down cleanly, false if any timed out."
   ([worker]
-   (stop-maintenance-worker! worker 5000))
+   (stop-maintenance-worker! worker "5s"))
   ([{:keys [^ScheduledExecutorService rescue-scheduler
             ^ScheduledExecutorService retention-scheduler
             ^ScheduledExecutorService reindex-scheduler
-            running?]} timeout-ms]
+            running?]} timeout]
    (reset! running? false)
    (doseq [^ScheduledExecutorService s [rescue-scheduler retention-scheduler reindex-scheduler]
            :when s]
      (.shutdown s))
-   (reduce (fn [clean? ^ScheduledExecutorService s]
-             (if s
-               (and clean? (.awaitTermination s (long timeout-ms) TimeUnit/MILLISECONDS))
-               clean?))
-           true
-           [rescue-scheduler retention-scheduler reindex-scheduler])))
+   (let [timeout-ms (long (duration/duration timeout))]
+     (reduce (fn [clean? ^ScheduledExecutorService s]
+               (if s
+                 (and clean? (.awaitTermination s timeout-ms TimeUnit/MILLISECONDS))
+                 clean?))
+             true
+             [rescue-scheduler retention-scheduler reindex-scheduler]))))

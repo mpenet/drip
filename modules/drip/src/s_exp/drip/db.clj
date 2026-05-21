@@ -123,18 +123,18 @@
    Returns nil when unique-opts is nil (no uniqueness constraint)."
   ^bytes [kind ^bytes encoded-args queue ^Instant now unique-opts]
   (when unique-opts
-    (let [{:keys [by-args? by-period by-queue?]} unique-opts
+    (let [{:keys [by-args by-period by-queue]} unique-opts
           sb (StringBuilder.)]
       (.append sb "kind=")
       (.append sb ^String kind)
-      (when by-args?
+      (when by-args
         (.append sb "&args=")
         (.append sb (.toString (BigInteger. 1 encoded-args) 16)))
       (when by-period
         (let [floor-ms (period-floor-ms (.toEpochMilli now) (long (duration/duration by-period)))]
           (.append sb "&period=")
           (.append sb floor-ms)))
-      (when by-queue?
+      (when by-queue
         (.append sb "&queue=")
         (.append sb ^String queue))
       (sha256 (.toString sb)))))

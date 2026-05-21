@@ -139,9 +139,9 @@ Prevent duplicate jobs using `:unique-opts`:
 ```clojure
 (drip/insert-job client "generate_report" {:type "monthly"}
   :unique-opts
-  {:by-args?  true                ; distinguish by args content
+  {:by-args  true                ; distinguish by args content
    :by-period "24h"               ; one per 24-hour window
-   :by-queue? true                ; scope to queue
+   :by-queue true                ; scope to queue
    :by-state  #{:available :pending :running :scheduled :retryable}})
 ```
 
@@ -151,9 +151,9 @@ The unique key is SHA-256 of `kind=[kind]&args=[hex]&period=[floor-ms]&queue=[qu
 
 | Option | Type | Effect |
 |---|---|---|
-| `:by-args?` | boolean | Include args content in key |
+| `:by-args` | boolean | Include args content in key |
 | `:by-period` | duration string or ms | Floor epoch to period window |
-| `:by-queue?` | boolean | Include queue name in key |
+| `:by-queue` | boolean | Include queue name in key |
 | `:by-state` | set of state keywords | States that block a duplicate insert |
 
 ### Handling the conflict

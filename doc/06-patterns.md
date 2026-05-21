@@ -201,7 +201,7 @@ The registry just maps kind strings to handler instances — they satisfy IFn so
         {:client   drip-client
          :registry (:registry worker-registry)})))
   (stop [{:keys [executor] :as this}]
-    (drip/stop-worker! executor 30000)
+    (drip/stop-worker! executor :timeout "30s")
     (dissoc this :executor)))
 ```
 
@@ -300,7 +300,7 @@ Jobs are fetched ordered by `(priority ASC, scheduled_at ASC)`, so lower-number 
          :queues      (or queues ["default"])
          :concurrency (or concurrency 10)})))
   (stop [{:keys [executor] :as this}]
-    (drip/stop-worker! executor 30000)
+    (drip/stop-worker! executor :timeout "30s")
     (dissoc this :executor)))
 
 (defn make-system [config]
@@ -373,10 +373,10 @@ Use an in-memory SQLite database for fast integration tests:
                       {:client           client
                        :registry         {"work" (fn [_ job]
                                                    (swap! processed conj (:args job)))}
-                       :poll-interval-ms 10})]
+                       :poll-interval 10})]
       (drip/insert-job client "work" {:n 1})
       (drip/insert-job client "work" {:n 2})
       (Thread/sleep 200)
-      (drip/stop-worker! executor 5000)
+      (drip/stop-worker! executor :timeout "5s")
       (is (= #{1 2} (set (map :n @processed)))))))
 ```

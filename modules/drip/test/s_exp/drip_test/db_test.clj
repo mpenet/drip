@@ -320,9 +320,9 @@
 (deftest unique-job-by-args
   (testing "second insert with same args conflicts"
     (let [unique-opts {:unique-opts
-                       {:by-args? true
+                       {:by-args true
                         :by-period nil
-                        :by-queue? false
+                        :by-queue false
                         :by-state job/default-unique-states}}
           j1 (drip/insert-job *client* "u_kind" {:x 1} unique-opts)]
       (is (some? (:unique-key j1)))
@@ -331,19 +331,19 @@
 
   (testing "different args do not conflict"
     (let [unique-opts {:unique-opts
-                       {:by-args? true
+                       {:by-args true
                         :by-period nil
-                        :by-queue? false
+                        :by-queue false
                         :by-state job/default-unique-states}}]
       (drip/insert-job *client* "u_kind2" {:x 1} unique-opts)
       (is (some? (drip/insert-job *client* "u_kind2" {:x 2} unique-opts))))))
 
 (deftest unique-job-by-queue
-  (testing "same kind+args conflict per queue when by-queue? true"
+  (testing "same kind+args conflict per queue when by-queue true"
     (let [opts {:unique-opts
-                {:by-args? false
+                {:by-args false
                  :by-period nil
-                 :by-queue? true
+                 :by-queue true
                  :by-state job/default-unique-states}}]
       (drip/insert-job *client* "qk" {} (assoc opts :queue "qa"))
       (is (thrown? Exception
@@ -366,8 +366,8 @@
 
   (testing "all-or-nothing: exception rolls back all inserts"
     (let [unique-opts {:unique-opts
-                       {:by-args? true :by-period nil
-                        :by-queue? false :by-state job/default-unique-states}}]
+                       {:by-args true :by-period nil
+                        :by-queue false :by-state job/default-unique-states}}]
       (drip/insert-job *client* "tx_test" {:x 99} unique-opts)
       (let [before-count (count (drip/list-jobs *client* {:kind "tx_test_new"}))]
         (is (thrown? Exception
@@ -587,8 +587,8 @@
 (deftest insert-many!-rollback-test
   (testing "exception in caller's tx rolls back all inserts"
     (let [unique-opts {:unique-opts
-                       {:by-args? true :by-period nil
-                        :by-queue? false :by-state job/default-unique-states}}
+                       {:by-args true :by-period nil
+                        :by-queue false :by-state job/default-unique-states}}
           _ (drip/insert-job *client* "rb_seed" {:x 99} unique-opts)
           before-count (count (drip/list-jobs *client* {:kind "rb_new"}))]
       (is (thrown? Exception

@@ -52,7 +52,7 @@ You can also pass a plain long (milliseconds): `3600000` = 1 hour.
 
 Each periodic spec computes a unique key from:
 - Job kind
-- Queue name (if `:by-queue?` is true — always true for periodic jobs)
+- Queue name (if `:by-queue` is true — always true for periodic jobs)
 - Period window (floor of current epoch to period boundary)
 
 If a job with that key exists in an active state (`:available`, `:pending`, `:running`, `:scheduled`, `:retryable`, or `:completed`), the new insert throws a constraint conflict. The periodic executor catches SQLState `23505` (PG) / `23000` (MariaDB/SQLite) silently and moves on. Any other error is logged.

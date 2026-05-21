@@ -10,9 +10,9 @@
   (long (duration/duration period)))
 
 (defn- periodic-unique-opts [period-ms queue]
-  {:by-args? false
+  {:by-args false
    :by-period period-ms
-   :by-queue? (boolean queue)
+   :by-queue (boolean queue)
    :by-state job/default-unique-states})
 
 (defn- periodic-insert-opts [spec]

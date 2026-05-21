@@ -26,7 +26,7 @@
         (.get f (long timeout-ms) TimeUnit/MILLISECONDS)
         (catch TimeoutException _
           (.cancel f true)
-          (throw (ex-info "job timed out" {:timeout-ms timeout-ms} (TimeoutException.))))
+          (throw (ex-info "job timed out" {:timeout timeout-ms} (TimeoutException.))))
         (catch ExecutionException e
           (throw (.getCause e)))))
     (worker client job)))
@@ -106,7 +106,7 @@
             job-timeouts
             queues
             concurrency
-            poll-interval-ms
+            poll-interval
             worker-id
             ^ExecutorService task-executor
             ^ScheduledExecutorService scheduler
@@ -134,7 +134,7 @@
    Optional options:
      :queues            - vector of queue names to consume (default [\"default\"])
      :concurrency       - max simultaneous in-flight jobs across all queues (default 10)
-     :poll-interval-ms  - polling interval in milliseconds (default 1000)
+     :poll-interval     - polling interval; duration string or ms (default \"1s\")
      :worker-id         - unique string ID (default random UUID)
      :retry-policies    - {kind-string retry-policy-fn, :default retry-policy-fn} map.
                           :default is the fallback policy (default: exponential backoff).
@@ -142,25 +142,27 @@
                           Policy fn: (fn [attempt] java.time.Instant)
                           Example: {:default drip/default-retry-policy
                                     \"email\" fast-retry-policy}
-     :job-timeouts      - unified timeout config map. :default is the global timeout in ms
-                          (nil = no timeout); kind-string keys override per kind.
+     :job-timeouts      - unified timeout config map. :default is the global timeout
+                          as a duration string or ms (nil = no timeout);
+                          kind-string keys override per kind.
                           Default: {:default nil} (no timeout).
-                          Example: {:default 30000
-                                    \"slow_report\" 120000
-                                    \"quick_notify\" 5000}
+                          Example: {:default \"30s\"
+                                    \"slow_report\" \"2m\"
+                                    \"quick_notify\" \"5s\"}
 
    On PostgreSQL, a LISTEN connection is started automatically; inserts from
    other processes trigger an immediate poll instead of waiting for the interval.
 
    Returns a Worker record. Stop with stop-worker!."
   [{:keys [client registry retry-policies job-timeouts queues
-           concurrency poll-interval-ms worker-id]
+           concurrency poll-interval worker-id]
     :or {queues ["default"]
          concurrency 10
-         poll-interval-ms 1000
+         poll-interval "1s"
          retry-policies {:default job/default-retry-policy}
          job-timeouts {:default nil}}}]
   (let [worker-id (or worker-id (str (random-uuid)))
+        poll-interval-ms (long (duration/duration poll-interval))
         task-executor (make-task-executor concurrency)
         scheduler (Executors/newSingleThreadScheduledExecutor)
         semaphore (Semaphore. (int concurrency))
@@ -185,7 +187,7 @@
      scheduler
      ^Runnable poll-fn
      0
-     (long poll-interval-ms)
+     poll-interval-ms
      TimeUnit/MILLISECONDS)
     (map->Worker
      {:client client
@@ -194,7 +196,7 @@
       :job-timeouts job-timeouts
       :queues queues
       :concurrency concurrency
-      :poll-interval-ms poll-interval-ms
+      :poll-interval poll-interval
       :worker-id worker-id
       :task-executor task-executor
       :scheduler scheduler
@@ -204,22 +206,34 @@
 
 (defn stop-worker!
   "Gracefully shuts down the worker.
-   Waits up to timeout-ms for in-flight jobs to finish (default 30s).
-   Returns true if clean shutdown, false if timed out."
-  ([executor]
-   (stop-worker! executor 30000))
-  ([{:keys [client
-            ^ExecutorService task-executor
-            ^ScheduledExecutorService scheduler
-            listener running?]}
-    timeout-ms]
-   (reset! running? false)
-   (.shutdown scheduler)
-   (client/stop-listener! client listener)
-   (.shutdown task-executor)
-   (.awaitTermination task-executor
-                      (long timeout-ms)
-                      TimeUnit/MILLISECONDS)))
+
+   Options (keyword args):
+     :timeout - max time to wait for in-flight jobs. Duration string or ms (default \"30s\")
+     :drain   - when true, stop polling immediately but wait for all
+                in-flight jobs to finish naturally before shutting down
+                the executor. Uses :timeout as the drain budget.
+                Useful for rolling deploys.
+
+   Returns true if clean shutdown within timeout, false if timed out."
+  [{:keys [client
+           ^ExecutorService task-executor
+           ^ScheduledExecutorService scheduler
+           ^Semaphore semaphore
+           concurrency
+           listener running?]}
+   & {:keys [timeout drain]
+      :or {timeout "30s"}}]
+  (reset! running? false)
+  (.shutdown scheduler)
+  (client/stop-listener! client listener)
+  (let [deadline (+ (System/currentTimeMillis) (long (duration/duration timeout)))]
+    (when drain
+      (let [remaining (max 0 (- deadline (System/currentTimeMillis)))]
+        (when (.tryAcquire semaphore (int concurrency) remaining TimeUnit/MILLISECONDS)
+          (.release semaphore (int concurrency)))))
+    (.shutdown task-executor)
+    (let [remaining (max 0 (- deadline (System/currentTimeMillis)))]
+      (.awaitTermination task-executor remaining TimeUnit/MILLISECONDS))))
 
 (defn stop-and-cancel!
   "Immediately cancels all in-flight jobs by interrupting their threads, then shuts down.

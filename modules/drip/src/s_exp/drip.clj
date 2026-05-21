@@ -428,18 +428,18 @@
 
    Key options:
      :retry-policies - {:default policy-fn, \"kind\" policy-fn} unified retry map
-     :job-timeouts   - {:default timeout-ms, \"kind\" timeout-ms} unified timeout map (nil = no timeout)
+     :job-timeouts   - {:default timeout, \"kind\" timeout} unified timeout map; duration string or ms (nil = no timeout)
 
    For rescue and retention, use start-maintenance-worker! separately."
   [opts]
   (worker/start-worker! opts))
 
 (defn stop-worker!
-  "Gracefully stops the worker. Optional second arg: timeout-ms (default 30000)."
-  ([worker]
-   (worker/stop-worker! worker))
-  ([worker timeout-ms]
-   (worker/stop-worker! worker timeout-ms)))
+  "Gracefully stops the worker.
+   Options: :timeout (duration string or ms, default \"30s\"), :drain (default false).
+   See s-exp.drip.worker/stop-worker! for full docs."
+  [worker & opts]
+  (apply worker/stop-worker! worker opts))
 
 (defn stop-and-cancel!
   "Immediately interrupts all in-flight jobs and shuts down the worker.
@@ -532,9 +532,9 @@
   (maintenance/start-maintenance-worker! opts))
 
 (defn stop-maintenance-worker!
-  "Shuts down the maintenance worker. Optional second arg: timeout-ms (default 5000)."
+  "Shuts down the maintenance worker. Optional second arg: timeout as duration string or ms (default \"5s\")."
   ([worker]
    (maintenance/stop-maintenance-worker! worker))
-  ([worker timeout-ms]
-   (maintenance/stop-maintenance-worker! worker timeout-ms)))
+  ([worker timeout]
+   (maintenance/stop-maintenance-worker! worker timeout)))
 
