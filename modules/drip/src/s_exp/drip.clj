@@ -429,6 +429,7 @@
    Key options:
      :retry-policies - {:default policy-fn, \"kind\" policy-fn} unified retry map
      :job-timeouts   - {:default timeout, \"kind\" timeout} unified timeout map; duration string or ms (nil = no timeout)
+     :executor       - optional ExecutorService for job dispatch (default: virtual-thread-per-task)
      :event-fn       - (fn [event]) observability hook for metrics/tracing/logging
 
    For rescue and retention, use start-maintenance-worker! separately."
@@ -527,15 +528,16 @@
      :retention-interval - how often to run retention cleanup; duration string or ms (default \"1m\")
      :reindex-interval   - how often to reindex; duration string or ms; nil = disabled.
                            PostgreSQL only. Caller handles leader election.
+     :event-fn           - (fn [event]) observability hook for metrics/tracing/logging
 
    Returns a MaintenanceWorker record. Stop with stop-maintenance-worker!."
   [opts]
   (maintenance/start-maintenance-worker! opts))
 
 (defn stop-maintenance-worker!
-  "Shuts down the maintenance worker. Optional second arg: timeout as duration string or ms (default \"5s\")."
-  ([worker]
-   (maintenance/stop-maintenance-worker! worker))
-  ([worker timeout]
-   (maintenance/stop-maintenance-worker! worker timeout)))
+  "Shuts down the maintenance worker.
+   Options: :timeout (duration string or ms, default \"5s\").
+   Returns true if clean shutdown, false if timed out."
+  [worker & opts]
+  (apply maintenance/stop-maintenance-worker! worker opts))
 

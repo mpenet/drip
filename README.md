@@ -305,6 +305,7 @@ Persist a handler's result into the job's `metadata` column under the `"output"`
                       "my_kind" fast-retry-policy}    ; per-kind overrides
    :job-timeouts     {:default  "30s"                 ; :default = global timeout; nil = no timeout
                       "slow_job" "2m"}               ; per-kind overrides; duration strings or ms
+   :executor         my-exec                         ; optional ExecutorService; drip owns shutdown
    :event-fn         (fn [event] ...)})              ; observability hook — metrics, tracing, logging
 ```
 

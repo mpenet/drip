@@ -140,6 +140,27 @@
         (is (some? job))
         (is (= :running (:state job)))))))
 
+(deftest custom-executor-test
+  (testing "user-supplied executor is used and jobs complete"
+    (let [done (promise)
+          custom-exec (java.util.concurrent.Executors/newVirtualThreadPerTaskExecutor)
+          w (worker/start-worker!
+             {:client *client*
+              :registry {"custom_exec_kind"
+                         (fn [client job]
+                           (drip/with-tx [tx client]
+                             (drip/complete-job! client tx (:id job)))
+                           (deliver done true))}
+              :executor custom-exec
+              :poll-interval 50})]
+      (try
+        (drip/insert-job *client* "custom_exec_kind" {} nil)
+        (is (deref done 5000 false))
+        (is (= custom-exec (:executor w)))
+        (finally
+          (worker/stop-worker! w :timeout "5s")
+          (.shutdown custom-exec))))))
+
 (deftest periodic-executor-test
   (testing "periodic spec inserts jobs at the given interval"
     (let [scheduler
@@ -302,10 +323,10 @@
                :retention nil})]
       (try
         (Thread/sleep 400)
-        (drip/stop-maintenance-worker! mw "5s")
+        (drip/stop-maintenance-worker! mw :timeout "5s")
         (is (= :retryable (:state (drip/get-job *client* (:id j)))))
         (finally
-          (try (drip/stop-maintenance-worker! mw "1s") (catch Exception _ nil))))))
+          (try (drip/stop-maintenance-worker! mw :timeout "1s") (catch Exception _ nil))))))
 
   (testing ":rescue-after map stored in maintenance worker record"
     (let [mw (drip/start-maintenance-worker!
@@ -315,7 +336,7 @@
                :retention nil})]
       (is (= "2h" (get (:rescue-after mw) :default)))
       (is (= "4h" (get (:rescue-after mw) "slow")))
-      (drip/stop-maintenance-worker! mw "1s"))))
+      (drip/stop-maintenance-worker! mw :timeout "1s"))))
 
 (deftest handler-receives-client-and-job
   (testing "handler receives client as first arg and job as second"

@@ -50,7 +50,10 @@ A handler is a plain function of two arguments: `[client job]`.
 
    ;; Polling
    :poll-interval "1s"            ; interval between polls (default "1s")
-   :worker-id        "worker-1"   ; unique ID for this executor (default random UUID)
+   :worker-id        "worker-1"   ; unique ID for this worker (default random UUID)
+
+   ;; Executor
+   :executor         my-executor  ; optional ExecutorService; drip shuts it down on stop
 
    ;; Retries
    :retry-policies   {:default  my-policy        ; :default = fallback policy for all kinds
@@ -118,6 +121,26 @@ Jobs run on virtual threads (Java 21+). High concurrency values (hundreds) are p
 {:queues      ["critical" "default" "bulk"]
  :concurrency 50}
 ```
+
+## Custom executor
+
+By default, drip creates a virtual-thread-per-task executor for job dispatch. Pass `:executor` to supply your own `ExecutorService` — useful for custom thread factories, MDC propagation, metrics instrumentation, or fixed-thread pools for CPU-bound work.
+
+```clojure
+(import '(java.util.concurrent Executors))
+
+(def my-exec (Executors/newVirtualThreadPerTaskExecutor))
+
+(def w (drip/start-worker!
+         {:client   client
+          :registry registry
+          :executor my-exec}))
+
+;; drip owns shutdown — stop-worker! shuts down my-exec
+(drip/stop-worker! w)
+```
+
+drip always shuts down the supplied executor on `stop-worker!` / `stop-and-cancel!`.
 
 ## Retry policies
 
@@ -216,7 +239,7 @@ Pass `:event-fn` to receive a callback for every worker event. Useful for metric
                  nil))})
 ```
 
-### Event types
+### Worker event types
 
 | Type | Extra keys |
 |---|---|
@@ -227,7 +250,17 @@ Pass `:event-fn` to receive a callback for every worker event. Useful for metric
 | `:s-exp.drip.job/discard` | — |
 | `:s-exp.drip.poll/fetched` | `:count` |
 
-All events carry `:worker-id`, `:queue`, `:kind`, `:job-id`, and `:attempt` where applicable.
+All job events carry `:worker-id`, `:queue`, `:kind`, `:job-id`, and `:attempt`.
+
+### Maintenance worker event types
+
+The maintenance worker also accepts `:event-fn`. Events fire after each task completes (or errors):
+
+| Type | Extra keys |
+|---|---|
+| `:s-exp.drip.maintenance/rescue` | `:duration-ms` (`:error` on failure) |
+| `:s-exp.drip.maintenance/retention` | `:duration-ms` (`:error` on failure) |
+| `:s-exp.drip.maintenance/reindex` | `:duration-ms` `:results` (`:error` on failure) |
 
 ## Maintenance worker
 

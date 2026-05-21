@@ -15,6 +15,10 @@
 
 (set! *warn-on-reflection* true)
 
+(defn- emit! [event-fn event]
+  (when event-fn
+    (try (event-fn event) (catch Exception _))))
+
 ;; ---------------------------------------------------------------------------
 ;; Retention / cleanup
 ;; ---------------------------------------------------------------------------
@@ -103,6 +107,7 @@
             retry-policy
             retention
             reindex-interval
+            event-fn
             ^ScheduledExecutorService rescue-scheduler
             ^ScheduledExecutorService retention-scheduler
             ^ScheduledExecutorService reindex-scheduler
@@ -142,13 +147,21 @@
                               PostgreSQL only; no-op on other databases.
                               Caller is responsible for leader election when using multiple nodes.
                               Example: \"24h\"
+     :event-fn              - optional (fn [event]) called after each maintenance task.
+                              Exceptions are swallowed. Event types:
+                                :s-exp.drip.maintenance/rescue    - after rescue run
+                                :s-exp.drip.maintenance/retention - after retention run
+                                :s-exp.drip.maintenance/reindex   - after reindex run
+                              All events carry :duration-ms. Error events carry :error (Exception).
+                              Reindex success events carry :results ({index-kw => status}).
 
    Returns a MaintenanceWorker record. Stop with stop-maintenance-worker!."
   [{:keys [client queues
            rescue-after rescue-interval
            retry-policy
            retention retention-interval
-           reindex-interval]
+           reindex-interval
+           event-fn]
     :or {queues ["default"]
          rescue-after {:default "1h"}
          rescue-interval "1m"
@@ -163,28 +176,47 @@
      rescue-scheduler rescue-interval
      (fn []
        (when @running?
-         (try
-           (db/with-tx [tx client]
-             (run-rescue client tx rescue-after retry-policy queues))
-           (catch Exception e
-             (log/error e "drip: rescue error"))))))
+         (let [t0 (System/currentTimeMillis)]
+           (try
+             (db/with-tx [tx client]
+               (run-rescue client tx rescue-after retry-policy queues))
+             (emit! event-fn {:type :s-exp.drip.maintenance/rescue
+                              :duration-ms (- (System/currentTimeMillis) t0)})
+             (catch Exception e
+               (log/error e "drip: rescue error")
+               (emit! event-fn {:type :s-exp.drip.maintenance/rescue
+                                :duration-ms (- (System/currentTimeMillis) t0)
+                                :error e})))))))
     (schedule-when!
      retention-scheduler retention-interval
      (fn []
        (when @running?
-         (try
-           (db/with-tx [tx client]
-             (run-cleaner client tx retention queues))
-           (catch Exception e
-             (log/error e "drip: retention error"))))))
+         (let [t0 (System/currentTimeMillis)]
+           (try
+             (db/with-tx [tx client]
+               (run-cleaner client tx retention queues))
+             (emit! event-fn {:type :s-exp.drip.maintenance/retention
+                              :duration-ms (- (System/currentTimeMillis) t0)})
+             (catch Exception e
+               (log/error e "drip: retention error")
+               (emit! event-fn {:type :s-exp.drip.maintenance/retention
+                                :duration-ms (- (System/currentTimeMillis) t0)
+                                :error e})))))))
     (schedule-when!
      reindex-scheduler reindex-interval
      (fn []
        (when @running?
-         (try
-           (reindex! client)
-           (catch Exception e
-             (log/error e "drip: reindex error"))))))
+         (let [t0 (System/currentTimeMillis)]
+           (try
+             (let [results (reindex! client)]
+               (emit! event-fn {:type :s-exp.drip.maintenance/reindex
+                                :duration-ms (- (System/currentTimeMillis) t0)
+                                :results results}))
+             (catch Exception e
+               (log/error e "drip: reindex error")
+               (emit! event-fn {:type :s-exp.drip.maintenance/reindex
+                                :duration-ms (- (System/currentTimeMillis) t0)
+                                :error e})))))))
     (map->MaintenanceWorker
      {:client client
       :queues queues
@@ -192,29 +224,33 @@
       :retry-policy retry-policy
       :retention retention
       :reindex-interval reindex-interval
+      :event-fn event-fn
       :rescue-scheduler rescue-scheduler
       :retention-scheduler retention-scheduler
       :reindex-scheduler reindex-scheduler
       :running? running?})))
 
 (defn stop-maintenance-worker!
-  "Shuts down the maintenance worker. Waits up to timeout (default \"5s\") for any
-   in-progress task to finish. timeout accepts a duration string or ms number.
+  "Shuts down the maintenance worker.
+
+   Options (keyword args):
+     :timeout - max time to wait for in-progress tasks; duration string or ms (default \"5s\")
+
    Returns true if all schedulers shut down cleanly, false if any timed out."
-  ([worker]
-   (stop-maintenance-worker! worker "5s"))
-  ([{:keys [^ScheduledExecutorService rescue-scheduler
-            ^ScheduledExecutorService retention-scheduler
-            ^ScheduledExecutorService reindex-scheduler
-            running?]} timeout]
-   (reset! running? false)
-   (doseq [^ScheduledExecutorService s [rescue-scheduler retention-scheduler reindex-scheduler]
-           :when s]
-     (.shutdown s))
-   (let [timeout-ms (long (duration/duration timeout))]
-     (reduce (fn [clean? ^ScheduledExecutorService s]
-               (if s
-                 (and clean? (.awaitTermination s timeout-ms TimeUnit/MILLISECONDS))
-                 clean?))
-             true
-             [rescue-scheduler retention-scheduler reindex-scheduler]))))
+  [{:keys [^ScheduledExecutorService rescue-scheduler
+           ^ScheduledExecutorService retention-scheduler
+           ^ScheduledExecutorService reindex-scheduler
+           running?]}
+   & {:keys [timeout]
+      :or {timeout "5s"}}]
+  (reset! running? false)
+  (doseq [^ScheduledExecutorService s [rescue-scheduler retention-scheduler reindex-scheduler]
+          :when s]
+    (.shutdown s))
+  (let [timeout-ms (long (duration/duration timeout))]
+    (reduce (fn [clean? ^ScheduledExecutorService s]
+              (if s
+                (and clean? (.awaitTermination s timeout-ms TimeUnit/MILLISECONDS))
+                clean?))
+            true
+            [rescue-scheduler retention-scheduler reindex-scheduler])))

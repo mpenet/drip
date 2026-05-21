@@ -135,7 +135,7 @@
             poll-interval
             worker-id
             event-fn
-            ^ExecutorService task-executor
+            ^ExecutorService executor
             ^ScheduledExecutorService scheduler
             ^Semaphore semaphore
             listener
@@ -176,6 +176,10 @@
                           Example: {:default \"30s\"
                                     \"slow_report\" \"2m\"
                                     \"quick_notify\" \"5s\"}
+     :executor          - optional java.util.concurrent.ExecutorService for job dispatch.
+                          Default: virtual-thread-per-task executor.
+                          drip always shuts it down on stop-worker!/stop-and-cancel!.
+                          Useful for custom thread factories, MDC propagation, etc.
      :event-fn          - optional (fn [event]) called for each worker event.
                           Exceptions thrown by the fn are swallowed.
                           Event map keys: :type :worker-id :queue :kind :job-id
@@ -193,7 +197,7 @@
 
    Returns a Worker record. Stop with stop-worker!."
   [{:keys [client registry retry-policies job-timeouts queues
-           concurrency poll-interval worker-id event-fn]
+           concurrency poll-interval worker-id executor event-fn]
     :or {queues ["default"]
          concurrency 10
          poll-interval "1s"
@@ -201,7 +205,7 @@
          job-timeouts {:default nil}}}]
   (let [worker-id (or worker-id (str (random-uuid)))
         poll-interval-ms (long (duration/duration poll-interval))
-        task-executor (make-task-executor concurrency)
+        task-executor (or executor (make-task-executor concurrency))
         scheduler (Executors/newSingleThreadScheduledExecutor)
         semaphore (Semaphore. (int concurrency))
         running? (atom true)
@@ -238,7 +242,7 @@
       :poll-interval poll-interval
       :worker-id worker-id
       :event-fn event-fn
-      :task-executor task-executor
+      :executor task-executor
       :scheduler scheduler
       :semaphore semaphore
       :listener listener
@@ -256,7 +260,7 @@
 
    Returns true if clean shutdown within timeout, false if timed out."
   [{:keys [client
-           ^ExecutorService task-executor
+           ^ExecutorService executor
            ^ScheduledExecutorService scheduler
            ^Semaphore semaphore
            concurrency
@@ -271,9 +275,9 @@
       (let [remaining (max 0 (- deadline (System/currentTimeMillis)))]
         (when (.tryAcquire semaphore (int concurrency) remaining TimeUnit/MILLISECONDS)
           (.release semaphore (int concurrency)))))
-    (.shutdown task-executor)
+    (.shutdown executor)
     (let [remaining (max 0 (- deadline (System/currentTimeMillis)))]
-      (.awaitTermination task-executor remaining TimeUnit/MILLISECONDS))))
+      (.awaitTermination executor remaining TimeUnit/MILLISECONDS))))
 
 (defn stop-and-cancel!
   "Immediately cancels all in-flight jobs by interrupting their threads, then shuts down.
@@ -281,10 +285,10 @@
    next worker startup (or via the periodic rescue in another running worker).
    Returns the list of cancelled Futures from shutdownNow."
   [{:keys [client
-           ^ExecutorService task-executor
+           ^ExecutorService executor
            ^ScheduledExecutorService scheduler
            listener running?]}]
   (reset! running? false)
   (.shutdown scheduler)
   (client/stop-listener! client listener)
-  (.shutdownNow task-executor))
+  (.shutdownNow executor))

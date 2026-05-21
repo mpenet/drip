@@ -1518,7 +1518,7 @@ Shuts down the periodic executor.
 
 (start-worker!
  {:keys
-  [client registry retry-policies job-timeouts queues concurrency poll-interval worker-id],
+  [client registry retry-policies job-timeouts queues concurrency poll-interval worker-id executor event-fn],
   :or
   {queues ["default"],
    concurrency 10,
@@ -1561,6 +1561,10 @@ Starts a job worker that polls queues and dispatches jobs to handlers.
                           Example: {:default "30s"
                                     "slow_report" "2m"
                                     "quick_notify" "5s"}
+     :executor          - optional java.util.concurrent.ExecutorService for job dispatch.
+                          Default: virtual-thread-per-task executor.
+                          drip always shuts it down on stop-worker!/stop-and-cancel!.
+                          Useful for custom thread factories, MDC propagation, etc.
      :event-fn          - optional (fn [event]) called for every worker event.
                           Exceptions are swallowed — never affects job processing.
                           Event types: :s-exp.drip.job/start :s-exp.drip.job/complete
@@ -1578,7 +1582,7 @@ Starts a job worker that polls queues and dispatches jobs to handlers.
 ## <a name="s-exp.drip.worker/stop-and-cancel!">`stop-and-cancel!`</a>
 ``` clojure
 
-(stop-and-cancel! {:keys [client task-executor scheduler listener running?]})
+(stop-and-cancel! {:keys [client executor scheduler listener running?]})
 ```
 Function.
 

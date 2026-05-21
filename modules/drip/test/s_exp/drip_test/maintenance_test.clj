@@ -186,7 +186,7 @@
               {:client *client*
                :rescue-interval 999999
                :retention-interval 999999})]
-      (is (true? (drip/stop-maintenance-worker! mw "5s")))))
+      (is (true? (drip/stop-maintenance-worker! mw :timeout "5s")))))
 
   (testing "disabled rescue — rescue-scheduler is nil"
     (let [mw (maintenance/start-maintenance-worker!
@@ -195,7 +195,7 @@
                :retention nil})]
       (is (nil? (:rescue-scheduler mw)))
       (is (nil? (:retention-scheduler mw)))
-      (maintenance/stop-maintenance-worker! mw "1s")))
+      (maintenance/stop-maintenance-worker! mw :timeout "1s")))
 
   (testing "disabled reindex — reindex-scheduler is nil"
     (let [mw (maintenance/start-maintenance-worker!
@@ -204,7 +204,7 @@
                :retention-interval 999999
                :reindex-interval nil})]
       (is (nil? (:reindex-scheduler mw)))
-      (maintenance/stop-maintenance-worker! mw "1s")))
+      (maintenance/stop-maintenance-worker! mw :timeout "1s")))
 
   (testing "reindex-interval set — reindex-scheduler is non-nil"
     (let [mw (maintenance/start-maintenance-worker!
@@ -213,7 +213,7 @@
                :retention-interval 999999
                :reindex-interval 999999})]
       (is (some? (:reindex-scheduler mw)))
-      (maintenance/stop-maintenance-worker! mw "1s"))))
+      (maintenance/stop-maintenance-worker! mw :timeout "1s"))))
 
 (deftest maintenance-worker-retention-integration
   (testing "maintenance worker deletes old completed jobs"
@@ -230,10 +230,10 @@
                :retention-interval 50})]
       (try
         (Thread/sleep 300)
-        (drip/stop-maintenance-worker! mw "5s")
+        (drip/stop-maintenance-worker! mw :timeout "5s")
         (is (nil? (drip/get-job *client* (:id j))))
         (finally
-          (try (drip/stop-maintenance-worker! mw 1000) (catch Exception _ nil)))))))
+          (try (drip/stop-maintenance-worker! mw :timeout "1s") (catch Exception _ nil)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; reindex! (PostgreSQL only)
