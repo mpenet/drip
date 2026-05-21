@@ -535,7 +535,7 @@
                       (not exists?) :not-found
                       artifact? :skipped
                       :else (do
-                              (.execute conn (str "REINDEX INDEX CONCURRENTLY " index-name))
+                              (jdbc/execute! conn [(str "REINDEX INDEX CONCURRENTLY " index-name)])
                               :reindexed)))))
          {}
          index-names)))))
