@@ -18,18 +18,26 @@
 (defn- postgres? []
   (= "s_exp.drip.client.postgres.PostgresClient" (.getName (class *client*))))
 
+(defn- sqlite? []
+  (= "s_exp.drip.client.sqlite.SQLiteClient" (.getName (class *client*))))
+
+(defn- encode-instant [^Instant i]
+  (if (sqlite?)
+    (db/instant->str i)
+    (db/instant->ts i)))
+
 (defn- backdate-finalized! [job-id seconds-ago]
   (drip/with-tx [tx *client*]
     (jdbc/execute-one! tx
                        ["UPDATE drip_job SET finalized_at = ? WHERE id = ?"
-                        (db/instant->str (.minusSeconds (Instant/now) seconds-ago))
+                        (encode-instant (.minusSeconds (Instant/now) seconds-ago))
                         job-id])))
 
 (defn- backdate-attempted! [job-id seconds-ago]
   (drip/with-tx [tx *client*]
     (jdbc/execute-one! tx
                        ["UPDATE drip_job SET attempted_at = ? WHERE id = ?"
-                        (db/instant->str (.minusSeconds (Instant/now) seconds-ago))
+                        (encode-instant (.minusSeconds (Instant/now) seconds-ago))
                         job-id])))
 
 ;; ---------------------------------------------------------------------------
