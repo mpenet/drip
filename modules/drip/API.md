@@ -1555,12 +1555,20 @@ Starts a job worker that polls queues and dispatches jobs to handlers.
                           Policy fn: (fn [attempt] java.time.Instant)
                           Example: {:default drip/default-retry-policy
                                     "email" fast-retry-policy}
-     :job-timeouts      - unified timeout config map. :default is the global timeout in ms
-                          (nil = no timeout); kind-string keys override per kind.
+     :job-timeouts      - unified timeout config map. :default is the global timeout as a
+                          duration string or ms (nil = no timeout); kind-string keys override per kind.
                           Default: {:default nil} (no timeout).
-                          Example: {:default 30000
-                                    "slow_report" 120000
-                                    "quick_notify" 5000}
+                          Example: {:default "30s"
+                                    "slow_report" "2m"
+                                    "quick_notify" "5s"}
+     :event-fn          - optional (fn [event]) called for every worker event.
+                          Exceptions are swallowed — never affects job processing.
+                          Event types: :s-exp.drip.job/start :s-exp.drip.job/complete
+                                       :s-exp.drip.job/fail :s-exp.drip.job/timeout
+                                       :s-exp.drip.job/discard :s-exp.drip.poll/fetched
+                          All events carry :worker-id :queue :kind :job-id :attempt where applicable.
+                          complete/fail/timeout add :duration-ms; fail/timeout add :error (Throwable).
+
    On PostgreSQL, a LISTEN connection is started automatically; inserts from
    other processes trigger an immediate poll instead of waiting for the interval.
 

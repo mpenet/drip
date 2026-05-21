@@ -304,7 +304,8 @@ Persist a handler's result into the job's `metadata` column under the `"output"`
    :retry-policies   {:default  my-policy              ; default: exponential backoff (1s, x2, max 1h, ±10%)
                       "my_kind" fast-retry-policy}    ; per-kind overrides
    :job-timeouts     {:default  "30s"                 ; :default = global timeout; nil = no timeout
-                      "slow_job" "2m"}})              ; per-kind overrides; duration strings or ms
+                      "slow_job" "2m"}               ; per-kind overrides; duration strings or ms
+   :event-fn         (fn [event] ...)})              ; observability hook — metrics, tracing, logging
 ```
 
 On PostgreSQL, a `LISTEN` connection starts automatically. Inserts in other processes trigger an immediate poll.

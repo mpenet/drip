@@ -58,7 +58,10 @@ A handler is a plain function of two arguments: `[client job]`.
 
    ;; Timeouts
    :job-timeouts     {:default  nil       ; global timeout; nil = no limit
-                      "slow_job" "2m"}}) ; per-kind override; duration strings or ms
+                      "slow_job" "2m"}   ; per-kind override; duration strings or ms
+
+   ;; Observability
+   :event-fn         (fn [event] ...)})  ; called for every worker event (metrics, tracing, logging)
 ```
 
 Rescue, retention, and reindex are handled by the [maintenance worker](#maintenance-worker).
@@ -196,6 +199,35 @@ Limit how long a single job can run. When exceeded, the job thread is interrupte
 ```
 
 `:default` is the global timeout applied to any kind not listed explicitly. If `:default` is nil (or absent), there is no global timeout. Per-kind entries override `:default` for that kind. Values accept duration strings (`"30s"`, `"2m"`) or plain millisecond numbers.
+
+## Observability
+
+Pass `:event-fn` to receive a callback for every worker event. Useful for metrics, tracing, and structured logging. Exceptions thrown by the fn are swallowed — it will never affect job processing.
+
+```clojure
+(drip/start-worker!
+  {:client   client
+   :registry registry
+   :event-fn (fn [{:keys [type kind queue job-id attempt duration-ms error]}]
+               (case type
+                 :s-exp.drip.job/complete (record-duration! kind duration-ms)
+                 :s-exp.drip.job/fail     (increment-counter! :job-failures {:kind kind})
+                 :s-exp.drip.job/timeout  (increment-counter! :job-timeouts {:kind kind})
+                 nil))})
+```
+
+### Event types
+
+| Type | Extra keys |
+|---|---|
+| `:s-exp.drip.job/start` | — |
+| `:s-exp.drip.job/complete` | `:duration-ms` |
+| `:s-exp.drip.job/fail` | `:duration-ms` `:error` |
+| `:s-exp.drip.job/timeout` | `:duration-ms` `:error` |
+| `:s-exp.drip.job/discard` | — |
+| `:s-exp.drip.poll/fetched` | `:count` |
+
+All events carry `:worker-id`, `:queue`, `:kind`, `:job-id`, and `:attempt` where applicable.
 
 ## Maintenance worker
 

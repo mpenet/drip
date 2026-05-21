@@ -18,6 +18,10 @@
   [_concurrency]
   (Executors/newVirtualThreadPerTaskExecutor))
 
+(defn- emit! [event-fn event]
+  (when event-fn
+    (try (event-fn event) (catch Exception _))))
+
 (defn- run-with-timeout
   [^ExecutorService task-executor worker client job timeout-ms]
   (if timeout-ms
@@ -31,42 +35,60 @@
           (throw (.getCause e)))))
     (worker client job)))
 
+(defn- timeout-ex? [^Throwable t]
+  (instance? TimeoutException (.getCause t)))
+
 (defn- process-job
-  [{:keys [client registry retry-policies job-timeouts
+  [{:keys [client registry retry-policies job-timeouts event-fn worker-id
            ^ExecutorService task-executor ^Semaphore semaphore]} job]
-  (try
-    (let [worker (get registry (:kind job))]
-      (if-not worker
-        (db/with-tx [tx client]
-          (client/discard-job! client tx (:id job)))
-        (let [timeout-ms (some-> (get job-timeouts (:kind job) (get job-timeouts :default))
-                                 duration/duration
-                                 long)
-              [ok? result-or-ex]
-              (try
-                [true (run-with-timeout task-executor worker client job timeout-ms)]
-                (catch Throwable t
-                  [false t]))]
-          (if ok?
-            nil
-            (let [^Throwable t result-or-ex
-                  policy (get retry-policies (:kind job) (get retry-policies :default))]
-              (db/with-tx [tx client]
-                (client/fail-job!
-                 client
-                 tx
-                 (:id job)
-                 {:error (or (.getMessage t) (str (class t)))
-                  :trace (let [sw (java.io.StringWriter.)
-                               pw (java.io.PrintWriter. sw)]
-                           (.printStackTrace t pw)
-                           (.toString sw))}
-                 policy)))))))
-    (finally
-      (.release semaphore))))
+  (let [base {:worker-id worker-id
+              :queue (:queue job)
+              :kind (:kind job)
+              :job-id (:id job)
+              :attempt (:attempt job)}]
+    (try
+      (let [handler (get registry (:kind job))]
+        (if-not handler
+          (do (db/with-tx [tx client]
+                (client/discard-job! client tx (:id job)))
+              (emit! event-fn (assoc base :type :s-exp.drip.job/discard)))
+          (let [timeout-ms (some-> (get job-timeouts (:kind job) (get job-timeouts :default))
+                                   duration/duration
+                                   long)
+                t0 (System/currentTimeMillis)
+                _ (emit! event-fn (assoc base :type :s-exp.drip.job/start))
+                [ok? result-or-ex]
+                (try
+                  [true (run-with-timeout task-executor handler client job timeout-ms)]
+                  (catch Throwable t
+                    [false t]))]
+            (let [duration-ms (- (System/currentTimeMillis) t0)]
+              (if ok?
+                (emit! event-fn (assoc base :type :s-exp.drip.job/complete :duration-ms duration-ms))
+                (let [^Throwable t result-or-ex
+                      policy (get retry-policies (:kind job) (get retry-policies :default))]
+                  (db/with-tx [tx client]
+                    (client/fail-job!
+                     client
+                     tx
+                     (:id job)
+                     {:error (or (.getMessage t) (str (class t)))
+                      :trace (let [sw (java.io.StringWriter.)
+                                   pw (java.io.PrintWriter. sw)]
+                               (.printStackTrace t pw)
+                               (.toString sw))}
+                     policy))
+                  (emit! event-fn (assoc base
+                                         :type (if (timeout-ex? t)
+                                                 :s-exp.drip.job/timeout
+                                                 :s-exp.drip.job/fail)
+                                         :duration-ms duration-ms
+                                         :error t))))))))
+      (finally
+        (.release semaphore)))))
 
 (defn- poll-queue
-  [{:keys [client registry retry-policies job-timeouts worker-id concurrency
+  [{:keys [client worker-id concurrency event-fn
            ^ExecutorService task-executor ^Semaphore semaphore] :as ctx} q]
   (let [available (.availablePermits semaphore)
         limit (min concurrency available)]
@@ -79,6 +101,10 @@
           (do
             (when (< (count jobs) limit)
               (.release semaphore (int (- limit (count jobs)))))
+            (emit! event-fn {:type :s-exp.drip.poll/fetched
+                             :worker-id worker-id
+                             :queue q
+                             :count (count jobs)})
             (doseq [job jobs]
               (.submit task-executor
                        ^Runnable (fn []
@@ -108,6 +134,7 @@
             concurrency
             poll-interval
             worker-id
+            event-fn
             ^ExecutorService task-executor
             ^ScheduledExecutorService scheduler
             ^Semaphore semaphore
@@ -149,13 +176,24 @@
                           Example: {:default \"30s\"
                                     \"slow_report\" \"2m\"
                                     \"quick_notify\" \"5s\"}
+     :event-fn          - optional (fn [event]) called for each worker event.
+                          Exceptions thrown by the fn are swallowed.
+                          Event map keys: :type :worker-id :queue :kind :job-id
+                                          :attempt :duration-ms :error :count
+                          Event types:
+                            :s-exp.drip.job/start    - job dispatched to handler
+                            :s-exp.drip.job/complete - handler returned without error
+                            :s-exp.drip.job/fail     - handler threw an exception
+                            :s-exp.drip.job/timeout  - job exceeded its timeout
+                            :s-exp.drip.job/discard  - no handler registered for kind
+                            :s-exp.drip.poll/fetched - jobs claimed from a queue
 
    On PostgreSQL, a LISTEN connection is started automatically; inserts from
    other processes trigger an immediate poll instead of waiting for the interval.
 
    Returns a Worker record. Stop with stop-worker!."
   [{:keys [client registry retry-policies job-timeouts queues
-           concurrency poll-interval worker-id]
+           concurrency poll-interval worker-id event-fn]
     :or {queues ["default"]
          concurrency 10
          poll-interval "1s"
@@ -174,6 +212,7 @@
              :queues queues
              :worker-id worker-id
              :concurrency concurrency
+             :event-fn event-fn
              :task-executor task-executor
              :semaphore semaphore}
         poll-fn (fn []
@@ -198,6 +237,7 @@
       :concurrency concurrency
       :poll-interval poll-interval
       :worker-id worker-id
+      :event-fn event-fn
       :task-executor task-executor
       :scheduler scheduler
       :semaphore semaphore

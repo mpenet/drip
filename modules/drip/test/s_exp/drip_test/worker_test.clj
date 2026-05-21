@@ -492,3 +492,85 @@
       (deref started 5000 nil)
       (worker/stop-worker! executor :timeout "5s" :drain true)
       (is @finished "job should have completed before stop-worker! returned"))))
+
+(deftest event-fn-hook-test
+  (testing "event-fn receives start and complete events for a successful job"
+    (let [events (atom [])
+          done (promise)
+          executor (worker/start-worker!
+                    {:client *client*
+                     :registry {"hook_kind"
+                                (fn [client job]
+                                  (drip/with-tx [tx client]
+                                    (drip/complete-job! client tx (:id job)))
+                                  (deliver done true))}
+                     :poll-interval 50
+                     :event-fn (fn [e] (swap! events conj e))})]
+      (try
+        (drip/insert-job *client* "hook_kind" {} nil)
+        (deref done 5000 nil)
+        (Thread/sleep 100)
+        (worker/stop-worker! executor :timeout "5s")
+        (let [types (set (map :type @events))]
+          (is (contains? types :s-exp.drip.job/start))
+          (is (contains? types :s-exp.drip.job/complete))
+          (is (contains? types :s-exp.drip.poll/fetched))
+          (let [complete-ev (first (filter #(= :s-exp.drip.job/complete (:type %)) @events))]
+            (is (= "hook_kind" (:kind complete-ev)))
+            (is (number? (:duration-ms complete-ev)))))
+        (finally
+          (try (worker/stop-worker! executor :timeout "1s") (catch Exception _ nil))))))
+
+  (testing "event-fn receives fail event when handler throws"
+    (let [events (atom [])
+          done (promise)
+          executor (worker/start-worker!
+                    {:client *client*
+                     :registry {"hook_fail_kind"
+                                (fn [_ _]
+                                  (deliver done true)
+                                  (throw (RuntimeException. "hook-fail")))}
+                     :poll-interval 50
+                     :event-fn (fn [e] (swap! events conj e))})]
+      (try
+        (drip/insert-job *client* "hook_fail_kind" {} {:max-attempts 1})
+        (deref done 5000 nil)
+        (Thread/sleep 200)
+        (worker/stop-worker! executor :timeout "5s")
+        (let [fail-ev (first (filter #(= :s-exp.drip.job/fail (:type %)) @events))]
+          (is (some? fail-ev))
+          (is (instance? Throwable (:error fail-ev))))
+        (finally
+          (try (worker/stop-worker! executor :timeout "1s") (catch Exception _ nil))))))
+
+  (testing "event-fn receives discard event for unknown kind"
+    (let [events (atom [])
+          executor (worker/start-worker!
+                    {:client *client*
+                     :registry {}
+                     :poll-interval 50
+                     :event-fn (fn [e] (swap! events conj e))})]
+      (try
+        (drip/insert-job *client* "hook_unknown_kind" {} nil)
+        (Thread/sleep 300)
+        (worker/stop-worker! executor :timeout "5s")
+        (is (some #(= :s-exp.drip.job/discard (:type %)) @events))
+        (finally
+          (try (worker/stop-worker! executor :timeout "1s") (catch Exception _ nil))))))
+
+  (testing "exception in event-fn does not affect job processing"
+    (let [done (promise)
+          executor (worker/start-worker!
+                    {:client *client*
+                     :registry {"hook_throw_kind"
+                                (fn [client job]
+                                  (drip/with-tx [tx client]
+                                    (drip/complete-job! client tx (:id job)))
+                                  (deliver done true))}
+                     :poll-interval 50
+                     :event-fn (fn [_] (throw (RuntimeException. "metrics exploded")))})]
+      (try
+        (drip/insert-job *client* "hook_throw_kind" {} nil)
+        (is (deref done 5000 false))
+        (finally
+          (try (worker/stop-worker! executor :timeout "1s") (catch Exception _ nil)))))))

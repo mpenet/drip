@@ -429,6 +429,7 @@
    Key options:
      :retry-policies - {:default policy-fn, \"kind\" policy-fn} unified retry map
      :job-timeouts   - {:default timeout, \"kind\" timeout} unified timeout map; duration string or ms (nil = no timeout)
+     :event-fn       - (fn [event]) observability hook for metrics/tracing/logging
 
    For rescue and retention, use start-maintenance-worker! separately."
   [opts]
