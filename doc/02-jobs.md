@@ -169,10 +169,27 @@ The unique key is a SHA-256 hash of `kind`, `args`, `period`, and `queue` — de
 
 | Option | Type | Default | Effect |
 |---|---|---|---|
-| `:by-args` | boolean | `false` | Include args content in key |
+| `:by-args` | boolean | `false` | Include full args content in key |
+| `:by-keys` | collection of keywords | `nil` | Include only these args keys in key |
 | `:by-period` | duration string or ms | `nil` | Floor epoch to period window |
 | `:by-queue` | boolean | `true` | Include queue name in key |
 | `:by-state` | set of state keywords | `job/default-unique-states` | States that block a duplicate insert |
+
+`:by-keys` takes precedence over `:by-args`. When set, only the specified keys are extracted from args and included in the hash — other fields are ignored. Keys are sorted before hashing so order in the collection doesn't matter:
+
+```clojure
+;; Only :customer-id matters for uniqueness — :trace-id and other fields are ignored
+(drip/insert-job client "process_order" {:customer-id 42 :trace-id "abc-123"}
+  :unique-opts {:by-keys [:customer-id]})
+
+;; Conflicts — same :customer-id
+(drip/insert-job client "process_order" {:customer-id 42 :trace-id "xyz-456"}
+  :unique-opts {:by-keys [:customer-id]})
+
+;; No conflict — different :customer-id
+(drip/insert-job client "process_order" {:customer-id 99 :trace-id "abc-123"}
+  :unique-opts {:by-keys [:customer-id]})
+```
 
 ### Default states and slot lifecycle
 

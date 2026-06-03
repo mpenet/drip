@@ -56,7 +56,7 @@
           queue (:queue opts)
           encoded-args (db/->json args)
           unique-opts (:unique-opts opts)
-          unique-key (db/compute-unique-key kind encoded-args queue now unique-opts)
+          unique-key (db/compute-unique-key kind args queue now unique-opts)
           unique-states (when unique-opts
                           (job/states->bitmask
                            (or (:by-state unique-opts) job/default-unique-states)))

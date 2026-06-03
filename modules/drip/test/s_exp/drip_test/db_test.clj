@@ -484,6 +484,24 @@
         (is (thrown? Exception (drip/insert-job *client* "uk_bit_run" {:n 1} opts)))))))
 
 ;; ---------------------------------------------------------------------------
+;; by-keys: field-level uniqueness
+;; ---------------------------------------------------------------------------
+
+(deftest unique-key-by-keys-ignores-other-fields
+  (testing "jobs with same by-keys values but different other fields conflict"
+    (let [opts {:unique-opts {:by-keys [:customer-id]}}
+          j (drip/insert-job *client* "uk_by_keys" {:customer-id 42 :trace-id "abc"} opts)]
+      (is (some? (:unique-key j)))
+      ;; Same :customer-id, different :trace-id → conflict
+      (is (thrown? Exception
+                   (drip/insert-job *client* "uk_by_keys" {:customer-id 42 :trace-id "xyz"} opts)))))
+
+  (testing "jobs with different by-keys values do not conflict"
+    (let [opts {:unique-opts {:by-keys [:customer-id]}}]
+      (drip/insert-job *client* "uk_by_keys2" {:customer-id 1 :trace-id "abc"} opts)
+      (is (some? (drip/insert-job *client* "uk_by_keys2" {:customer-id 2 :trace-id "abc"} opts))))))
+
+;; ---------------------------------------------------------------------------
 ;; Unique jobs
 ;; ---------------------------------------------------------------------------
 

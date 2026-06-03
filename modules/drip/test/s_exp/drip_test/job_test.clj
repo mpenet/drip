@@ -44,10 +44,10 @@
 
 (deftest compute-unique-key-test
   (testing "nil unique-opts returns nil"
-    (is (nil? (db/compute-unique-key "kind" (db/->json {}) "q" (Instant/now) nil))))
+    (is (nil? (db/compute-unique-key "kind" {} "q" (Instant/now) nil))))
 
   (testing "non-nil unique-opts returns 32 bytes"
-    (let [k (db/compute-unique-key "kind" (db/->json {:x 1}) "q" (Instant/now)
+    (let [k (db/compute-unique-key "kind" {:x 1} "q" (Instant/now)
                                    {:by-args true :by-period nil
                                     :by-queue false :by-state nil})]
       (is (bytes? k))
@@ -55,33 +55,53 @@
 
   (testing "same inputs produce same key"
     (let [now (Instant/now)
-          args (db/->json {:x 1})
           opts {:by-args true :by-period nil :by-queue false :by-state nil}
-          k1 (db/compute-unique-key "kind" args "q" now opts)
-          k2 (db/compute-unique-key "kind" args "q" now opts)]
+          k1 (db/compute-unique-key "kind" {:x 1} "q" now opts)
+          k2 (db/compute-unique-key "kind" {:x 1} "q" now opts)]
       (is (java.util.Arrays/equals ^bytes k1 ^bytes k2))))
 
   (testing "different args produce different keys"
     (let [now (Instant/now)
           opts {:by-args true :by-period nil :by-queue false :by-state nil}
-          k1 (db/compute-unique-key "kind" (db/->json {:x 1}) "q" now opts)
-          k2 (db/compute-unique-key "kind" (db/->json {:x 2}) "q" now opts)]
+          k1 (db/compute-unique-key "kind" {:x 1} "q" now opts)
+          k2 (db/compute-unique-key "kind" {:x 2} "q" now opts)]
       (is (not (java.util.Arrays/equals ^bytes k1 ^bytes k2)))))
 
   (testing "by-period: keys in same window are equal"
     (let [opts {:by-args false :by-period 3600000 :by-queue false :by-state nil}
           now (Instant/now)
           t2 (.plusSeconds now 1)
-          k1 (db/compute-unique-key "k" (db/->json {}) "q" now opts)
-          k2 (db/compute-unique-key "k" (db/->json {}) "q" t2 opts)]
+          k1 (db/compute-unique-key "k" {} "q" now opts)
+          k2 (db/compute-unique-key "k" {} "q" t2 opts)]
       (is (java.util.Arrays/equals ^bytes k1 ^bytes k2))))
 
   (testing "by-queue: different queues produce different keys"
     (let [now (Instant/now)
           opts {:by-args false :by-period nil :by-queue true :by-state nil}
-          k1 (db/compute-unique-key "k" (db/->json {}) "q1" now opts)
-          k2 (db/compute-unique-key "k" (db/->json {}) "q2" now opts)]
-      (is (not (java.util.Arrays/equals ^bytes k1 ^bytes k2))))))
+          k1 (db/compute-unique-key "k" {} "q1" now opts)
+          k2 (db/compute-unique-key "k" {} "q2" now opts)]
+      (is (not (java.util.Arrays/equals ^bytes k1 ^bytes k2)))))
+
+  (testing "by-keys: only selected keys included in hash"
+    (let [now (Instant/now)
+          opts {:by-keys [:a :b]}
+          args-full {:a 1 :b 2 :c 99}
+          args-diff-c {:a 1 :b 2 :c 0}
+          args-diff-b {:a 1 :b 9 :c 99}
+          k-full (db/compute-unique-key "k" args-full "q" now opts)
+          k-diff-c (db/compute-unique-key "k" args-diff-c "q" now opts)
+          k-diff-b (db/compute-unique-key "k" args-diff-b "q" now opts)]
+      ;; :c differs but is not in by-keys → same key
+      (is (java.util.Arrays/equals ^bytes k-full ^bytes k-diff-c))
+      ;; :b differs and is in by-keys → different key
+      (is (not (java.util.Arrays/equals ^bytes k-full ^bytes k-diff-b)))))
+
+  (testing "by-keys: key order in by-keys does not affect hash"
+    (let [now (Instant/now)
+          args {:a 1 :b 2}
+          k1 (db/compute-unique-key "k" args "q" now {:by-keys [:a :b]})
+          k2 (db/compute-unique-key "k" args "q" now {:by-keys [:b :a]})]
+      (is (java.util.Arrays/equals ^bytes k1 ^bytes k2)))))
 
 (deftest retry-policy-test
   (testing "default-retry-policy returns Instant in the future"

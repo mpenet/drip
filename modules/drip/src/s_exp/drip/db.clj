@@ -118,18 +118,26 @@
 (defn- period-floor-ms ^long [^long epoch-ms ^long period-ms]
   (* (quot epoch-ms period-ms) period-ms))
 
+(defn- args->hex ^String [args]
+  (.toString (BigInteger. 1 (->json args)) 16))
+
 (defn compute-unique-key
   "Computes a 32-byte SHA-256 unique key for a job.
-   Returns nil when unique-opts is nil (no uniqueness constraint)."
-  ^bytes [kind ^bytes encoded-args queue ^Instant now unique-opts]
+   Returns nil when unique-opts is nil (no uniqueness constraint).
+   args is the raw (pre-serialization) args map."
+  ^bytes [kind args queue ^Instant now unique-opts]
   (when unique-opts
-    (let [{:keys [by-args by-period by-queue]} unique-opts
+    (let [{:keys [by-args by-keys by-period by-queue]} unique-opts
           sb (StringBuilder.)]
       (.append sb "kind=")
       (.append sb ^String kind)
-      (when by-args
-        (.append sb "&args=")
-        (.append sb (.toString (BigInteger. 1 encoded-args) 16)))
+      (cond
+        (seq by-keys)
+        (do (.append sb "&args=")
+            (.append sb (args->hex (into (sorted-map) (select-keys args by-keys)))))
+        by-args
+        (do (.append sb "&args=")
+            (.append sb (args->hex args))))
       (when by-period
         (let [floor-ms (period-floor-ms (.toEpochMilli now) (long (duration/duration by-period)))]
           (.append sb "&period=")
