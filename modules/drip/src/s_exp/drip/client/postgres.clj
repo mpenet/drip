@@ -253,13 +253,20 @@
                      SET state = ?::drip_job_state,
                          errors = array_append(errors, ?::jsonb),
                          scheduled_at = COALESCE(?, scheduled_at),
-                         finalized_at = ?
+                         finalized_at = ?,
+                         unique_key = CASE
+                           WHEN ? AND unique_states IS NOT NULL
+                                AND NOT drip_job_state_in_bitmask(unique_states, 'discarded'::drip_job_state)
+                           THEN NULL
+                           ELSE unique_key
+                         END
                      WHERE id = ? AND state = 'running'::drip_job_state
                      RETURNING *"
                    new-state
                    (db/->json-str error-entry)
                    (encode-ts next-run)
                    (encode-ts (when exhausted? now))
+                   exhausted?
                    job-id]
                   db/jdbc-opts)]
       (row->job (or result (jdbc/execute-one! tx
@@ -407,12 +414,19 @@
                SET state = ?::drip_job_state,
                    errors = array_append(errors, ?::jsonb),
                    scheduled_at = COALESCE(?, scheduled_at),
-                   finalized_at = ?
+                   finalized_at = ?,
+                   unique_key = CASE
+                     WHEN ? AND unique_states IS NOT NULL
+                          AND NOT drip_job_state_in_bitmask(unique_states, 'discarded'::drip_job_state)
+                     THEN NULL
+                     ELSE unique_key
+                   END
                WHERE id = ? AND state = 'running'::drip_job_state"
              new-state
              (db/->json-str error-entry)
              (encode-ts next-run)
              (encode-ts (when exhausted? now))
+             exhausted?
              (:id row)])
            (inc n)))
        0
