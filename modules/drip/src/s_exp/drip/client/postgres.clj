@@ -157,31 +157,36 @@
           scheduled-at (or (:scheduled-at opts) now)
           initial-state (if (.isAfter ^Instant scheduled-at now) "scheduled" "available")
           tags-arr ^"[Ljava.lang.String;" (into-array String (map str (:tags opts)))
-          result (jdbc/execute-one!
-                  tx
-                  ["INSERT INTO drip_job
-                      (state, attempt, max_attempts, scheduled_at, priority,
-                       args, attempted_by, errors,
-                       kind, metadata, queue, tags,
-                       unique_key, unique_states, ephemeral)
-                    VALUES (?::drip_job_state, 0, ?, ?, ?,
-                            ?::jsonb, '{}', '{}',
-                            ?, ?::jsonb, ?, ?,
-                            ?, ?::bit(8), ?)
-                    RETURNING *"
-                   initial-state
-                   (int (:max-attempts opts))
-                   (encode-ts scheduled-at)
-                   (int (:priority opts))
-                   (db/->json-str args)
-                   kind
-                   (db/->json-str (:metadata opts))
-                   queue
-                   tags-arr
-                   unique-key
-                   unique-states-str
-                   (boolean (:ephemeral opts))]
-                  db/jdbc-opts)]
+          result (try
+                   (jdbc/execute-one!
+                    tx
+                    ["INSERT INTO drip_job
+                        (state, attempt, max_attempts, scheduled_at, priority,
+                         args, attempted_by, errors,
+                         kind, metadata, queue, tags,
+                         unique_key, unique_states, ephemeral)
+                      VALUES (?::drip_job_state, 0, ?, ?, ?,
+                              ?::jsonb, '{}', '{}',
+                              ?, ?::jsonb, ?, ?,
+                              ?, ?::bit(8), ?)
+                      RETURNING *"
+                     initial-state
+                     (int (:max-attempts opts))
+                     (encode-ts scheduled-at)
+                     (int (:priority opts))
+                     (db/->json-str args)
+                     kind
+                     (db/->json-str (:metadata opts))
+                     queue
+                     tags-arr
+                     unique-key
+                     unique-states-str
+                     (boolean (:ephemeral opts))]
+                    db/jdbc-opts)
+                   (catch java.sql.SQLException e
+                     (when-not (db/unique-conflict-sql-states (.getSQLState e))
+                       (throw e))
+                     (throw (db/unique-conflict-ex kind queue unique-opts e))))]
       (row->job result)))
 
   (fetch-jobs! [_ tx queue worker-id opts]

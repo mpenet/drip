@@ -101,6 +101,27 @@
           args {:a 1 :b 2}
           k1 (db/compute-unique-key "k" args "q" now {:by-keys [:a :b]})
           k2 (db/compute-unique-key "k" args "q" now {:by-keys [:b :a]})]
+      (is (java.util.Arrays/equals ^bytes k1 ^bytes k2))))
+
+  (testing "exclude-kind: different kinds produce same key when exclude-kind is true"
+    (let [now (Instant/now)
+          opts {:by-args true :exclude-kind true}
+          k1 (db/compute-unique-key "kind-a" {:x 1} "q" now opts)
+          k2 (db/compute-unique-key "kind-b" {:x 1} "q" now opts)]
+      (is (java.util.Arrays/equals ^bytes k1 ^bytes k2))))
+
+  (testing "exclude-kind: same args without exclude-kind differ by kind"
+    (let [now (Instant/now)
+          opts {:by-args true}
+          k1 (db/compute-unique-key "kind-a" {:x 1} "q" now opts)
+          k2 (db/compute-unique-key "kind-b" {:x 1} "q" now opts)]
+      (is (not (java.util.Arrays/equals ^bytes k1 ^bytes k2)))))
+
+  (testing "by-args: key order in args map does not affect hash"
+    (let [now (Instant/now)
+          opts {:by-args true}
+          k1 (db/compute-unique-key "k" {:a 1 :b 2} "q" now opts)
+          k2 (db/compute-unique-key "k" {:b 2 :a 1} "q" now opts)]
       (is (java.util.Arrays/equals ^bytes k1 ^bytes k2)))))
 
 (deftest retry-policy-test

@@ -62,38 +62,43 @@
                            (or (:by-state unique-opts) job/default-unique-states)))
           scheduled-at (or (:scheduled-at opts) now)
           initial-state (if (.isAfter ^Instant scheduled-at now) "scheduled" "available")]
-      (jdbc/execute-one!
-       tx
-       ["INSERT INTO drip_job
-             (attempt, attempted_by, encoded_args, errors,
-              kind, max_attempts, metadata, priority,
-              queue, scheduled_at, state, tags,
-              unique_key, unique_states, ephemeral)
-           VALUES (0, JSON_ARRAY(), ?, JSON_ARRAY(),
-                   ?, ?, ?, ?,
-                   ?, ?, ?, ?,
-                   ?, ?, ?)"
-        encoded-args
-        kind
-        (int (:max-attempts opts))
-        (db/->json-str (:metadata opts))
-        (int (:priority opts))
-        queue
-        (encode-ts scheduled-at)
-        initial-state
-        (db/->json-str (:tags opts))
-        unique-key
-        unique-states
-        (if (:ephemeral opts) 1 0)]
-       {})
-      (let [inserted-id (-> (jdbc/execute-one! tx
-                                               ["SELECT LAST_INSERT_ID() AS id"]
-                                               db/jdbc-opts)
-                            :id)]
-        (row->job
-         (jdbc/execute-one! tx
-                            ["SELECT * FROM drip_job WHERE id = ?" inserted-id]
-                            db/jdbc-opts)))))
+      (try
+        (jdbc/execute-one!
+         tx
+         ["INSERT INTO drip_job
+               (attempt, attempted_by, encoded_args, errors,
+                kind, max_attempts, metadata, priority,
+                queue, scheduled_at, state, tags,
+                unique_key, unique_states, ephemeral)
+             VALUES (0, JSON_ARRAY(), ?, JSON_ARRAY(),
+                     ?, ?, ?, ?,
+                     ?, ?, ?, ?,
+                     ?, ?, ?)"
+          encoded-args
+          kind
+          (int (:max-attempts opts))
+          (db/->json-str (:metadata opts))
+          (int (:priority opts))
+          queue
+          (encode-ts scheduled-at)
+          initial-state
+          (db/->json-str (:tags opts))
+          unique-key
+          unique-states
+          (if (:ephemeral opts) 1 0)]
+         {})
+        (let [inserted-id (-> (jdbc/execute-one! tx
+                                                 ["SELECT LAST_INSERT_ID() AS id"]
+                                                 db/jdbc-opts)
+                              :id)]
+          (row->job
+           (jdbc/execute-one! tx
+                              ["SELECT * FROM drip_job WHERE id = ?" inserted-id]
+                              db/jdbc-opts)))
+        (catch java.sql.SQLException e
+          (when-not (db/unique-conflict-sql-states (.getSQLState e))
+            (throw e))
+          (throw (db/unique-conflict-ex kind queue unique-opts e))))))
 
   (fetch-jobs! [_ tx queue worker-id opts]
     (let [{:keys [limit] :or {limit 10}} opts

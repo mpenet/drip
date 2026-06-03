@@ -119,7 +119,7 @@
   (* (quot epoch-ms period-ms) period-ms))
 
 (defn- args->hex ^String [args]
-  (.toString (BigInteger. 1 (->json args)) 16))
+  (.toString (BigInteger. 1 (->json (into (sorted-map) args))) 16))
 
 (defn compute-unique-key
   "Computes a 32-byte SHA-256 unique key for a job.
@@ -127,14 +127,15 @@
    args is the raw (pre-serialization) args map."
   ^bytes [kind args queue ^Instant now unique-opts]
   (when unique-opts
-    (let [{:keys [by-args by-keys by-period by-queue]} unique-opts
+    (let [{:keys [by-args by-keys by-period by-queue exclude-kind]} unique-opts
           sb (StringBuilder.)]
-      (.append sb "kind=")
-      (.append sb ^String kind)
+      (when-not exclude-kind
+        (.append sb "kind=")
+        (.append sb ^String kind))
       (cond
         (seq by-keys)
         (do (.append sb "&args=")
-            (.append sb (args->hex (into (sorted-map) (select-keys args by-keys)))))
+            (.append sb (args->hex (select-keys args by-keys))))
         by-args
         (do (.append sb "&args=")
             (.append sb (args->hex args))))
@@ -146,6 +147,23 @@
         (.append sb "&queue=")
         (.append sb ^String queue))
       (sha256 (.toString sb)))))
+
+;; ---------------------------------------------------------------------------
+;; Unique conflict error
+;; ---------------------------------------------------------------------------
+
+(def unique-conflict-sql-states #{"23505" "23000"})
+
+(defn unique-conflict-ex
+  "Builds an ExceptionInfo for a unique job constraint violation.
+   cause is the originating java.sql.SQLException."
+  [kind queue unique-opts ^Throwable cause]
+  (ex-info "Unique job conflict"
+           {:type        :s-exp.drip/unique-conflict
+            :kind        kind
+            :queue       queue
+            :unique-opts unique-opts}
+           cause))
 
 ;; ---------------------------------------------------------------------------
 ;; DDL / Migration

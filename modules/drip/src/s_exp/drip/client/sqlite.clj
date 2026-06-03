@@ -12,7 +12,8 @@
             [s-exp.drip.db :as db]
             [s-exp.drip.job :as job]
             [s-exp.duration :as duration])
-  (:import (java.time Instant)))
+  (:import (java.time Instant)
+           (org.sqlite SQLiteErrorCode SQLiteException)))
 
 (set! *warn-on-reflection* true)
 
@@ -69,30 +70,35 @@
                            (or (:by-state unique-opts) job/default-unique-states)))
           scheduled-at (or (:scheduled-at opts) now)
           initial-state (if (.isAfter ^Instant scheduled-at now) "scheduled" "available")
-          result (jdbc/execute-one!
-                  tx
-                  ["INSERT INTO drip_job
-                      (attempt, attempted_by, encoded_args, errors,
-                       kind, max_attempts, metadata, priority,
-                       queue, scheduled_at, state, tags,
-                       unique_key, unique_states, ephemeral)
-                    VALUES (0, json_array(), ?, json_array(),
-                            ?, ?, ?, ?,
-                            ?, ?, ?, ?,
-                            ?, ?, ?)"
-                   encoded-args
-                   kind
-                   (int (:max-attempts opts))
-                   (db/->json-str (:metadata opts))
-                   (int (:priority opts))
-                   queue
-                   (encode-ts scheduled-at)
-                   initial-state
-                   (db/->json-str (:tags opts))
-                   unique-key
-                   unique-states
-                   (if (:ephemeral opts) 1 0)]
-                  {:return-keys true})]
+          result (try
+                   (jdbc/execute-one!
+                    tx
+                    ["INSERT INTO drip_job
+                        (attempt, attempted_by, encoded_args, errors,
+                         kind, max_attempts, metadata, priority,
+                         queue, scheduled_at, state, tags,
+                         unique_key, unique_states, ephemeral)
+                      VALUES (0, json_array(), ?, json_array(),
+                              ?, ?, ?, ?,
+                              ?, ?, ?, ?,
+                              ?, ?, ?)"
+                     encoded-args
+                     kind
+                     (int (:max-attempts opts))
+                     (db/->json-str (:metadata opts))
+                     (int (:priority opts))
+                     queue
+                     (encode-ts scheduled-at)
+                     initial-state
+                     (db/->json-str (:tags opts))
+                     unique-key
+                     unique-states
+                     (if (:ephemeral opts) 1 0)]
+                    {:return-keys true})
+                   (catch SQLiteException e
+                     (when-not (= SQLiteErrorCode/SQLITE_CONSTRAINT_UNIQUE (.getResultCode ^SQLiteException e))
+                       (throw e))
+                     (throw (db/unique-conflict-ex kind queue unique-opts e))))]
       (row->job
        (jdbc/execute-one!
         tx

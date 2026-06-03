@@ -517,6 +517,21 @@
       (is (thrown? Exception
                    (drip/insert-job *client* "u_kind" {:x 1} unique-opts)))))
 
+  (testing "conflict throws ExceptionInfo with :type :s-exp.drip/unique-conflict"
+    (let [unique-opts {:unique-opts
+                       {:by-args true
+                        :by-period nil
+                        :by-queue false
+                        :by-state job/default-unique-states}}]
+      (drip/insert-job *client* "u_kind_ex" {:x 42} unique-opts)
+      (try
+        (drip/insert-job *client* "u_kind_ex" {:x 42} unique-opts)
+        (is false "expected exception")
+        (catch clojure.lang.ExceptionInfo e
+          (is (= :s-exp.drip/unique-conflict (:type (ex-data e))))
+          (is (= "u_kind_ex" (:kind (ex-data e))))
+          (is (instance? java.sql.SQLException (ex-cause e)))))))
+
   (testing "different args do not conflict"
     (let [unique-opts {:unique-opts
                        {:by-args true

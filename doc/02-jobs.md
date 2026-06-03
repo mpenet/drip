@@ -174,6 +174,7 @@ The unique key is a SHA-256 hash of `kind`, `args`, `period`, and `queue` — de
 | `:by-period` | duration string or ms | `nil` | Floor epoch to period window |
 | `:by-queue` | boolean | `true` | Include queue name in key |
 | `:by-state` | set of state keywords | `job/default-unique-states` | States that block a duplicate insert |
+| `:exclude-kind` | boolean | `false` | Omit job kind from key (cross-kind uniqueness) |
 
 `:by-keys` takes precedence over `:by-args`. When set, only the specified keys are extracted from args and included in the hash — other fields are ignored. Keys are sorted before hashing so order in the collection doesn't matter:
 
@@ -189,6 +190,23 @@ The unique key is a SHA-256 hash of `kind`, `args`, `period`, and `queue` — de
 ;; No conflict — different :customer-id
 (drip/insert-job client "process_order" {:customer-id 99 :trace-id "abc-123"}
   :unique-opts {:by-keys [:customer-id]})
+```
+
+`:by-args` and `:by-keys` normalize map key order before hashing, so `{:a 1 :b 2}` and `{:b 2 :a 1}` produce the same key.
+
+### Cross-kind uniqueness with `:exclude-kind`
+
+By default the job kind is included in the unique key, so `"job_a"` and `"job_b"` with identical args never conflict. Set `:exclude-kind true` to omit the kind — useful when multiple job kinds represent the same logical operation and you want exactly one in the queue regardless of which kind:
+
+```clojure
+;; Both kinds share a uniqueness slot when exclude-kind is true
+(drip/insert-job client "send_email_v1" {:user-id 42}
+  :unique-opts {:by-args true :exclude-kind true})
+
+;; Conflicts — same args, kind excluded from key
+(drip/insert-job client "send_email_v2" {:user-id 42}
+  :unique-opts {:by-args true :exclude-kind true})
+;; => throws SQLException
 ```
 
 ### Default states and slot lifecycle
@@ -220,15 +238,24 @@ To keep the slot occupied through cancellation or discard, include those states:
 
 ### Handling the conflict
 
-The second insert throws `java.sql.SQLException` with SQLState `23505` (PostgreSQL) or `23000` (MariaDB/SQLite). Catch it or let it propagate — the existing job is unaffected:
+When a duplicate insert is blocked, drip throws a `clojure.lang.ExceptionInfo` with `:type :s-exp.drip/unique-conflict` in `ex-data`. The originating `java.sql.SQLException` is available via `ex-cause`:
 
 ```clojure
 (try
   (drip/insert-job client "daily_summary" {} :unique-opts {:by-period "24h"})
-  (catch java.sql.SQLException e
-    (when-not (contains? #{"23505" "23000"} (.getSQLState e))
-      (throw e))))
+  (catch clojure.lang.ExceptionInfo e
+    (when (= :s-exp.drip/unique-conflict (:type (ex-data e)))
+      (log/info "job already queued" (select-keys (ex-data e) [:kind :queue])))))
 ```
+
+The `ex-data` map contains:
+
+| Key | Description |
+|---|---|
+| `:type` | `:s-exp.drip/unique-conflict` |
+| `:kind` | Job kind string |
+| `:queue` | Queue name |
+| `:unique-opts` | The `unique-opts` map passed to the insert |
 
 Periodic jobs use unique constraints automatically — no manual handling needed.
 
