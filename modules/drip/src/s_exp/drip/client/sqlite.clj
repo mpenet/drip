@@ -148,7 +148,10 @@
     (let [now (encode-ts (Instant/now))]
       (jdbc/execute-one!
        tx
-       ["UPDATE drip_job SET state = 'completed', finalized_at = ?
+       ["UPDATE drip_job
+          SET state = 'completed',
+              finalized_at = ?,
+              unique_key = CASE WHEN unique_states IS NOT NULL AND (unique_states & 32) = 0 THEN NULL ELSE unique_key END
           WHERE id = ? AND state = 'running'"
         now job-id])
       (let [job (row->job (jdbc/execute-one! tx
@@ -167,6 +170,7 @@
           new-errors (conj (or (:errors job) []) error-entry)
           exhausted? (>= (:attempt job) (:max-attempts job))
           new-state (if exhausted? "discarded" "retryable")
+          new-state-bit (if exhausted? 16 4)
           next-run (when-not exhausted? (retry-policy (:attempt job)))]
       (jdbc/execute-one!
        tx
@@ -174,12 +178,14 @@
           SET state = ?,
               errors = ?,
               scheduled_at = COALESCE(?, scheduled_at),
-              finalized_at = ?
+              finalized_at = ?,
+              unique_key = CASE WHEN unique_states IS NOT NULL AND (unique_states & ?) = 0 THEN NULL ELSE unique_key END
           WHERE id = ? AND state = 'running'"
         new-state
         (db/->json-str new-errors)
         (encode-ts next-run)
         (encode-ts (when exhausted? now))
+        new-state-bit
         job-id])
       (row->job (jdbc/execute-one! tx
                                    ["SELECT * FROM drip_job WHERE id = ?" job-id]
@@ -189,7 +195,10 @@
     (let [now (encode-ts (Instant/now))]
       (jdbc/execute-one!
        tx
-       ["UPDATE drip_job SET state = 'cancelled', finalized_at = ?
+       ["UPDATE drip_job
+          SET state = 'cancelled',
+              finalized_at = ?,
+              unique_key = CASE WHEN unique_states IS NOT NULL AND (unique_states & 64) = 0 THEN NULL ELSE unique_key END
           WHERE id = ? AND state NOT IN ('cancelled','completed','discarded')"
         now job-id])
       (row->job (jdbc/execute-one! tx
@@ -211,7 +220,10 @@
     (let [now (encode-ts (Instant/now))]
       (jdbc/execute-one!
        tx
-       ["UPDATE drip_job SET state = 'discarded', finalized_at = ?
+       ["UPDATE drip_job
+          SET state = 'discarded',
+              finalized_at = ?,
+              unique_key = CASE WHEN unique_states IS NOT NULL AND (unique_states & 16) = 0 THEN NULL ELSE unique_key END
           WHERE id = ? AND state NOT IN ('completed','discarded')"
         now job-id])
       (row->job (jdbc/execute-one! tx
@@ -291,6 +303,7 @@
        (fn [^long n row]
          (let [exhausted? (>= (:attempt row) (:max-attempts row))
                new-state (if exhausted? "discarded" "retryable")
+               new-state-bit (if exhausted? 16 4)
                next-run (when-not exhausted? (retry-policy (:attempt row)))
                job (row->job (jdbc/execute-one! tx
                                                 ["SELECT * FROM drip_job WHERE id = ?" (:id row)]
@@ -302,12 +315,14 @@
                SET state = ?,
                    errors = ?,
                    scheduled_at = COALESCE(?, scheduled_at),
-                   finalized_at = ?
+                   finalized_at = ?,
+                   unique_key = CASE WHEN unique_states IS NOT NULL AND (unique_states & ?) = 0 THEN NULL ELSE unique_key END
                WHERE id = ? AND state = 'running'"
              new-state
              (db/->json-str new-errors)
              (encode-ts next-run)
              (encode-ts (when exhausted? now))
+             new-state-bit
              (:id row)])
            (inc n)))
        0

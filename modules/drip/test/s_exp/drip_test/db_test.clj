@@ -314,6 +314,109 @@
         (is (= :available (:state promoted)))))))
 
 ;; ---------------------------------------------------------------------------
+;; Unique key clearing on finalization
+;;
+;; When a job transitions to a state NOT in its unique_states bitmask, the
+;; unique_key must be cleared so a new identical job can be inserted.
+;; MariaDB/SQLite do this with a CASE expression in the UPDATE; PostgreSQL
+;; uses a partial index.
+;; ---------------------------------------------------------------------------
+
+(defn- unique-opts-with-states [states]
+  {:unique-opts {:by-args true :by-period nil :by-queue false :by-state states}})
+
+(deftest unique-key-cancel-clears-by-default
+  (testing "cancel-job! clears unique_key when :cancelled not in unique_states"
+    (let [opts (unique-opts-with-states job/default-unique-states)
+          j (drip/insert-job *client* "uk_cancel_clear" {:n 1} opts)]
+      (is (some? (:unique-key j)))
+      (is (thrown? Exception (drip/insert-job *client* "uk_cancel_clear" {:n 1} opts)))
+      (let [cancelled (drip/cancel-job *client* (:id j))]
+        (is (nil? (:unique-key cancelled)))
+        (is (some? (drip/insert-job *client* "uk_cancel_clear" {:n 1} opts))))))
+
+  (testing "cancel-job! keeps unique_key when :cancelled IS in unique_states"
+    (let [opts (unique-opts-with-states (conj job/default-unique-states :cancelled))
+          j (drip/insert-job *client* "uk_cancel_keep" {:n 1} opts)]
+      (is (some? (:unique-key j)))
+      (let [cancelled (drip/cancel-job *client* (:id j))]
+        (is (some? (:unique-key cancelled)))
+        (is (thrown? Exception (drip/insert-job *client* "uk_cancel_keep" {:n 1} opts)))))))
+
+(deftest unique-key-discard-clears-by-default
+  (testing "discard-job! clears unique_key when :discarded not in unique_states"
+    (let [opts (unique-opts-with-states job/default-unique-states)
+          j (drip/insert-job *client* "uk_discard_clear" {:n 1} opts)
+          _ (drip/fetch-jobs *client* "default" "w" :limit 1)
+          discarded (drip/discard-job *client* (:id j))]
+      (is (nil? (:unique-key discarded)))
+      (is (some? (drip/insert-job *client* "uk_discard_clear" {:n 1} opts)))))
+
+  (testing "discard-job! keeps unique_key when :discarded IS in unique_states"
+    (let [opts (unique-opts-with-states (conj job/default-unique-states :discarded))
+          j (drip/insert-job *client* "uk_discard_keep" {:n 1} opts)
+          _ (drip/fetch-jobs *client* "default" "w" :limit 1)
+          discarded (drip/discard-job *client* (:id j))]
+      (is (some? (:unique-key discarded)))
+      (is (thrown? Exception (drip/insert-job *client* "uk_discard_keep" {:n 1} opts))))))
+
+(deftest unique-key-complete-respects-bitmask
+  (testing "complete-job! keeps unique_key when :completed IS in unique_states (default)"
+    (let [opts (unique-opts-with-states job/default-unique-states)
+          j (drip/insert-job *client* "uk_complete_keep" {:n 1} opts)
+          _ (drip/fetch-jobs *client* "default" "w" :limit 1)
+          done (drip/with-tx [tx *client*]
+                 (drip-client/complete-job! *client* tx (:id j)))]
+      (is (some? (:unique-key done)))
+      (is (thrown? Exception (drip/insert-job *client* "uk_complete_keep" {:n 1} opts)))))
+
+  (testing "complete-job! clears unique_key when :completed NOT in unique_states"
+    (let [opts (unique-opts-with-states #{:available :running :scheduled})
+          j (drip/insert-job *client* "uk_complete_clear" {:n 1} opts)
+          _ (drip/fetch-jobs *client* "default" "w" :limit 1)
+          done (drip/with-tx [tx *client*]
+                 (drip-client/complete-job! *client* tx (:id j)))]
+      (is (nil? (:unique-key done)))
+      (is (some? (drip/insert-job *client* "uk_complete_clear" {:n 1} opts))))))
+
+(deftest unique-key-fail-job-exhausted-clears
+  (testing "fail-job! clears unique_key when exhausted → :discarded not in unique_states"
+    (let [opts (unique-opts-with-states job/default-unique-states)
+          j (drip/insert-job *client* "uk_fail_exhausted" {:n 1} (merge opts {:max-attempts 1}))
+          _ (drip/fetch-jobs *client* "default" "w" :limit 1)
+          failed (drip/with-tx [tx *client*]
+                   (drip-client/fail-job! *client* tx (:id j)
+                                          {:error "x"} job/default-retry-policy))]
+      (is (= :discarded (:state failed)))
+      (is (nil? (:unique-key failed)))
+      (is (some? (drip/insert-job *client* "uk_fail_exhausted" {:n 1} opts))))))
+
+(deftest unique-key-fail-job-retryable-keeps
+  (testing "fail-job! keeps unique_key when not exhausted → :retryable IS in unique_states"
+    (let [opts (unique-opts-with-states job/default-unique-states)
+          j (drip/insert-job *client* "uk_fail_retry" {:n 1} (merge opts {:max-attempts 3}))
+          _ (drip/fetch-jobs *client* "default" "w" :limit 1)
+          failed (drip/with-tx [tx *client*]
+                   (drip-client/fail-job! *client* tx (:id j)
+                                          {:error "x"} job/default-retry-policy))]
+      (is (= :retryable (:state failed)))
+      (is (some? (:unique-key failed)))
+      (is (thrown? Exception (drip/insert-job *client* "uk_fail_retry" {:n 1} opts))))))
+
+(deftest unique-key-rescue-stuck-jobs-exhausted-clears
+  (testing "rescue-stuck-jobs! clears unique_key when exhausted → :discarded not in unique_states"
+    (let [opts (unique-opts-with-states job/default-unique-states)
+          j (drip/insert-job *client* "uk_rescue_exhausted" {:n 1} (merge opts {:max-attempts 1}))
+          _ (drip/fetch-jobs *client* "default" "w" :limit 1)
+          stuck-after (.minusSeconds (Instant/now) 1)]
+      (drip/with-tx [tx *client*]
+        (drip-client/rescue-stuck-jobs! *client* tx stuck-after job/default-retry-policy nil))
+      (let [rescued (drip/get-job *client* (:id j))]
+        (is (= :discarded (:state rescued)))
+        (is (nil? (:unique-key rescued)))
+        (is (some? (drip/insert-job *client* "uk_rescue_exhausted" {:n 1} opts)))))))
+
+;; ---------------------------------------------------------------------------
 ;; Unique jobs
 ;; ---------------------------------------------------------------------------
 
