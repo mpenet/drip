@@ -270,7 +270,15 @@
     (let [now (encode-ts (Instant/now))
           result (jdbc/execute-one!
                   tx
-                  ["UPDATE drip_job SET state = 'cancelled'::drip_job_state, finalized_at = ?
+                  ["UPDATE drip_job
+                     SET state = 'cancelled'::drip_job_state,
+                         finalized_at = ?,
+                         unique_key = CASE
+                           WHEN unique_states IS NOT NULL
+                                AND NOT drip_job_state_in_bitmask(unique_states, 'cancelled'::drip_job_state)
+                           THEN NULL
+                           ELSE unique_key
+                         END
                      WHERE id = ?
                        AND state NOT IN ('cancelled'::drip_job_state,'completed'::drip_job_state,'discarded'::drip_job_state)
                      RETURNING *"
@@ -298,7 +306,15 @@
     (let [now (encode-ts (Instant/now))
           result (jdbc/execute-one!
                   tx
-                  ["UPDATE drip_job SET state = 'discarded'::drip_job_state, finalized_at = ?
+                  ["UPDATE drip_job
+                     SET state = 'discarded'::drip_job_state,
+                         finalized_at = ?,
+                         unique_key = CASE
+                           WHEN unique_states IS NOT NULL
+                                AND NOT drip_job_state_in_bitmask(unique_states, 'discarded'::drip_job_state)
+                           THEN NULL
+                           ELSE unique_key
+                         END
                      WHERE id = ?
                        AND state NOT IN ('completed'::drip_job_state,'discarded'::drip_job_state)
                      RETURNING *"
