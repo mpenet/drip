@@ -260,13 +260,13 @@ Prevent duplicate jobs using `:unique-opts`:
 ```clojure
 (drip/insert-job client "report" {:period "daily"}
   :unique-opts
-  {:by-args  true                     ; distinct per args value
-   :by-period "24h"                    ; one per 24h window
-   :by-queue true                     ; scope to queue
-   :by-state  #{:available :pending :running :scheduled :retryable}})
+  {:by-args   true                  ; distinct per args value
+   :by-period "24h"                 ; one per 24h window
+   :by-queue  true                  ; scope to queue
+   :by-state  job/default-unique-states})
 ```
 
-A second insert within the same window throws a constraint violation. Periodic jobs use this automatically.
+A second insert throws a constraint violation while the original job is in any of the `:by-state` states. The slot is freed when the job leaves those states — cancelled or discarded jobs don't block re-insertion with the default configuration. Periodic jobs use this automatically.
 
 ### Workers
 

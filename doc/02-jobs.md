@@ -157,22 +157,49 @@ Prevent duplicate jobs using `:unique-opts`:
 ```clojure
 (drip/insert-job client "generate_report" {:type "monthly"}
   :unique-opts
-  {:by-args  true                ; distinguish by args content
-   :by-period "24h"               ; one per 24-hour window
-   :by-queue true                ; scope to queue
-   :by-state  #{:available :pending :running :scheduled :retryable}})
+  {:by-args   true    ; distinguish by args content
+   :by-period "24h"   ; one per 24-hour window
+   :by-queue  true    ; scope to queue
+   :by-state  job/default-unique-states})
 ```
 
-The unique key is SHA-256 of `kind=[kind]&args=[hex]&period=[floor-ms]&queue=[queue]`, depending on which dimensions you enable. If another job with the same key exists in any of the specified states, the insert throws a constraint violation.
+The unique key is a SHA-256 hash of `kind`, `args`, `period`, and `queue` — depending on which dimensions are enabled. If another job with the same key exists in any of the specified states, the insert throws a constraint violation.
 
 ### Uniqueness dimensions
 
-| Option | Type | Effect |
-|---|---|---|
-| `:by-args` | boolean | Include args content in key |
-| `:by-period` | duration string or ms | Floor epoch to period window |
-| `:by-queue` | boolean | Include queue name in key |
-| `:by-state` | set of state keywords | States that block a duplicate insert |
+| Option | Type | Default | Effect |
+|---|---|---|---|
+| `:by-args` | boolean | `false` | Include args content in key |
+| `:by-period` | duration string or ms | `nil` | Floor epoch to period window |
+| `:by-queue` | boolean | `true` | Include queue name in key |
+| `:by-state` | set of state keywords | `job/default-unique-states` | States that block a duplicate insert |
+
+### Default states and slot lifecycle
+
+`job/default-unique-states` is `#{:available :pending :running :scheduled :retryable :completed}`. Notably, `:cancelled` and `:discarded` are **not** included.
+
+The uniqueness slot is active only while the job is in one of the `:by-state` states. When the job leaves all covered states — by being cancelled, discarded, or exhausted — the slot is freed and an identical job can be inserted again:
+
+```clojure
+;; Insert unique job
+(drip/insert-job client "sync" {} {:unique-opts {:by-args true}})
+
+;; Conflicts while the original is alive in a covered state
+(drip/insert-job client "sync" {} {:unique-opts {:by-args true}})
+;; => throws SQLException
+
+;; Cancel the original — slot freed
+(drip/cancel-job client job-id)
+
+;; Now succeeds
+(drip/insert-job client "sync" {} {:unique-opts {:by-args true}})
+```
+
+To keep the slot occupied through cancellation or discard, include those states:
+
+```clojure
+{:by-state (conj job/default-unique-states :cancelled :discarded)}
+```
 
 ### Handling the conflict
 
