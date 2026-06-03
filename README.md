@@ -260,13 +260,32 @@ Prevent duplicate jobs using `:unique-opts`:
 ```clojure
 (drip/insert-job client "report" {:period "daily"}
   :unique-opts
-  {:by-args   true                  ; distinct per args value
-   :by-period "24h"                 ; one per 24h window
-   :by-queue  true                  ; scope to queue
-   :by-state  job/default-unique-states})
+  {:by-args      true                       ; distinct per args value
+   :by-period    "24h"                      ; one per 24h window
+   :by-queue     true                       ; scope to queue
+   :by-state     job/default-unique-states  ; states that block re-insertion
+   :by-keys      [:customer-id]             ; only these args keys in hash
+   :exclude-kind true})                     ; cross-kind uniqueness
 ```
 
-A second insert throws a constraint violation while the original job is in any of the `:by-state` states. The slot is freed when the job leaves those states — cancelled or discarded jobs don't block re-insertion with the default configuration. Periodic jobs use this automatically.
+| Option | Effect |
+|---|---|
+| `:by-args` | Include full args content in key |
+| `:by-keys` | Include only these args keys (takes precedence over `:by-args`) |
+| `:by-period` | Floor epoch to period window |
+| `:by-queue` | Include queue name in key |
+| `:by-state` | States that block a duplicate insert (default: all except `:cancelled`/`:discarded`) |
+| `:exclude-kind` | Omit job kind from key (cross-kind uniqueness) |
+
+A duplicate insert throws `clojure.lang.ExceptionInfo` with `:type :s-exp.drip/unique-conflict` in `ex-data`. The slot is freed when the job leaves all covered states — cancelled or discarded jobs don't block re-insertion by default. Periodic jobs use unique constraints automatically.
+
+```clojure
+(try
+  (drip/insert-job client "daily_report" {} :unique-opts {:by-period "24h"})
+  (catch clojure.lang.ExceptionInfo e
+    (when (= :s-exp.drip/unique-conflict (:type (ex-data e)))
+      :already-queued)))
+```
 
 ### Workers
 
