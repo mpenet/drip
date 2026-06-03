@@ -255,7 +255,7 @@
                          scheduled_at = COALESCE(?, scheduled_at),
                          finalized_at = ?,
                          unique_key = CASE
-                           WHEN ? AND unique_states IS NOT NULL
+                           WHEN ?::boolean AND unique_states IS NOT NULL
                                 AND NOT drip_job_state_in_bitmask(unique_states, 'discarded'::drip_job_state)
                            THEN NULL
                            ELSE unique_key
@@ -416,7 +416,7 @@
                    scheduled_at = COALESCE(?, scheduled_at),
                    finalized_at = ?,
                    unique_key = CASE
-                     WHEN ? AND unique_states IS NOT NULL
+                     WHEN ?::boolean AND unique_states IS NOT NULL
                           AND NOT drip_job_state_in_bitmask(unique_states, 'discarded'::drip_job_state)
                      THEN NULL
                      ELSE unique_key
