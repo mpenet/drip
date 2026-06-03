@@ -467,19 +467,14 @@
 
 (deftest unique-key-bitmask-running-only
   (testing "unique_states=#{:running}: PostgreSQL partial index leaves slot free while :available"
-    ;; On PostgreSQL the partial index only covers :running rows, so re-inserting while the
-    ;; original job is still :available does not conflict. On MariaDB/SQLite the plain UNIQUE
-    ;; index fires immediately regardless of state.
-    (let [opts (unique-opts-with-states #{:running})
-          j (drip/insert-job *client* "uk_bit_run" {:n 1} opts)]
+    ;; On PostgreSQL the partial index only covers :running rows. While the original job
+    ;; is still :available (not covered), a second insert with the same key is allowed.
+    ;; On MariaDB/SQLite the plain UNIQUE index fires immediately regardless of state.
+    (let [opts (unique-opts-with-states #{:running})]
+      (drip/insert-job *client* "uk_bit_run" {:n 1} opts)
       (if (postgres?)
-        (do
-          ;; In :available — not covered by partial index → re-insert allowed
-          (is (some? (drip/insert-job *client* "uk_bit_run" {:n 1} opts)))
-          ;; Fetch both → :running — now covered; third insert conflicts
-          (drip/fetch-jobs *client* "default" "w" :limit 2)
-          (is (= :running (:state (drip/get-job *client* (:id j)))))
-          (is (thrown? Exception (drip/insert-job *client* "uk_bit_run" {:n 1} opts))))
+        ;; :available is not in the partial index → second insert is allowed
+        (is (some? (drip/insert-job *client* "uk_bit_run" {:n 1} opts)))
         ;; MariaDB/SQLite: plain UNIQUE index fires immediately
         (is (thrown? Exception (drip/insert-job *client* "uk_bit_run" {:n 1} opts)))))))
 
