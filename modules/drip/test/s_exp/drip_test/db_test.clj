@@ -408,7 +408,11 @@
     (let [opts (unique-opts-with-states job/default-unique-states)
           j (drip/insert-job *client* "uk_rescue_exhausted" {:n 1} (merge opts {:max-attempts 1}))
           _ (drip/fetch-jobs *client* "default" "w" :limit 1)
-          stuck-after (.minusSeconds (Instant/now) 1)]
+          _ (drip/with-tx [tx *client*]
+              (jdbc/execute-one! tx
+                                 ["UPDATE drip_job SET attempted_at = ? WHERE id = ?"
+                                  (db/instant->ts (.minusSeconds (Instant/now) 7200)) (:id j)]))
+          stuck-after (.minusSeconds (Instant/now) 3600)]
       (drip/with-tx [tx *client*]
         (drip-client/rescue-stuck-jobs! *client* tx stuck-after job/default-retry-policy nil))
       (let [rescued (drip/get-job *client* (:id j))]
