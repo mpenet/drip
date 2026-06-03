@@ -70,7 +70,7 @@
   (let [bits (int-array 8)]
     (doseq [s state-coll]
       (when-let [pos (job/state->bit s)]
-        (aset bits (- 7 pos) (int 1))))
+        (aset bits pos (int 1))))
     (apply str (map #(aget bits %) (range 8)))))
 
 ;; ---------------------------------------------------------------------------
@@ -253,20 +253,13 @@
                      SET state = ?::drip_job_state,
                          errors = array_append(errors, ?::jsonb),
                          scheduled_at = COALESCE(?, scheduled_at),
-                         finalized_at = ?,
-                         unique_key = CASE
-                           WHEN ?::boolean AND unique_states IS NOT NULL
-                                AND NOT drip_job_state_in_bitmask(unique_states, 'discarded'::drip_job_state)
-                           THEN NULL
-                           ELSE unique_key
-                         END
+                         finalized_at = ?
                      WHERE id = ? AND state = 'running'::drip_job_state
                      RETURNING *"
                    new-state
                    (db/->json-str error-entry)
                    (encode-ts next-run)
                    (encode-ts (when exhausted? now))
-                   exhausted?
                    job-id]
                   db/jdbc-opts)]
       (row->job (or result (jdbc/execute-one! tx
@@ -279,13 +272,7 @@
                   tx
                   ["UPDATE drip_job
                      SET state = 'cancelled'::drip_job_state,
-                         finalized_at = ?,
-                         unique_key = CASE
-                           WHEN unique_states IS NOT NULL
-                                AND NOT drip_job_state_in_bitmask(unique_states, 'cancelled'::drip_job_state)
-                           THEN NULL
-                           ELSE unique_key
-                         END
+                         finalized_at = ?
                      WHERE id = ?
                        AND state NOT IN ('cancelled'::drip_job_state,'completed'::drip_job_state,'discarded'::drip_job_state)
                      RETURNING *"
@@ -315,13 +302,7 @@
                   tx
                   ["UPDATE drip_job
                      SET state = 'discarded'::drip_job_state,
-                         finalized_at = ?,
-                         unique_key = CASE
-                           WHEN unique_states IS NOT NULL
-                                AND NOT drip_job_state_in_bitmask(unique_states, 'discarded'::drip_job_state)
-                           THEN NULL
-                           ELSE unique_key
-                         END
+                         finalized_at = ?
                      WHERE id = ?
                        AND state NOT IN ('completed'::drip_job_state,'discarded'::drip_job_state)
                      RETURNING *"
@@ -414,19 +395,12 @@
                SET state = ?::drip_job_state,
                    errors = array_append(errors, ?::jsonb),
                    scheduled_at = COALESCE(?, scheduled_at),
-                   finalized_at = ?,
-                   unique_key = CASE
-                     WHEN ?::boolean AND unique_states IS NOT NULL
-                          AND NOT drip_job_state_in_bitmask(unique_states, 'discarded'::drip_job_state)
-                     THEN NULL
-                     ELSE unique_key
-                   END
+                   finalized_at = ?
                WHERE id = ? AND state = 'running'::drip_job_state"
              new-state
              (db/->json-str error-entry)
              (encode-ts next-run)
              (encode-ts (when exhausted? now))
-             exhausted?
              (:id row)])
            (inc n)))
        0

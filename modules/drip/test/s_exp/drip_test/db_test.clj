@@ -10,6 +10,9 @@
 
 (use-fixtures :each with-db)
 
+(defn- postgres? []
+  (= "s_exp.drip.client.postgres.PostgresClient" (.getName (class *client*))))
+
 ;; ---------------------------------------------------------------------------
 ;; Migration
 ;; ---------------------------------------------------------------------------
@@ -332,7 +335,6 @@
       (is (some? (:unique-key j)))
       (is (thrown? Exception (drip/insert-job *client* "uk_cancel_clear" {:n 1} opts)))
       (let [cancelled (drip/cancel-job *client* (:id j))]
-        (is (nil? (:unique-key cancelled)))
         (is (some? (drip/insert-job *client* "uk_cancel_clear" {:n 1} opts))))))
 
   (testing "cancel-job! keeps unique_key when :cancelled IS in unique_states"
@@ -349,7 +351,6 @@
           j (drip/insert-job *client* "uk_discard_clear" {:n 1} opts)
           _ (drip/fetch-jobs *client* "default" "w" :limit 1)
           discarded (drip/discard-job *client* (:id j))]
-      (is (nil? (:unique-key discarded)))
       (is (some? (drip/insert-job *client* "uk_discard_clear" {:n 1} opts)))))
 
   (testing "discard-job! keeps unique_key when :discarded IS in unique_states"
@@ -376,7 +377,6 @@
           _ (drip/fetch-jobs *client* "default" "w" :limit 1)
           done (drip/with-tx [tx *client*]
                  (drip-client/complete-job! *client* tx (:id j)))]
-      (is (nil? (:unique-key done)))
       (is (some? (drip/insert-job *client* "uk_complete_clear" {:n 1} opts))))))
 
 (deftest unique-key-fail-job-exhausted-clears
@@ -388,7 +388,6 @@
                    (drip-client/fail-job! *client* tx (:id j)
                                           {:error "x"} job/default-retry-policy))]
       (is (= :discarded (:state failed)))
-      (is (nil? (:unique-key failed)))
       (is (some? (drip/insert-job *client* "uk_fail_exhausted" {:n 1} opts))))))
 
 (deftest unique-key-fail-job-retryable-keeps
@@ -417,8 +416,72 @@
         (drip-client/rescue-stuck-jobs! *client* tx stuck-after job/default-retry-policy nil))
       (let [rescued (drip/get-job *client* (:id j))]
         (is (= :discarded (:state rescued)))
-        (is (nil? (:unique-key rescued)))
         (is (some? (drip/insert-job *client* "uk_rescue_exhausted" {:n 1} opts)))))))
+
+(deftest unique-key-rescue-stuck-jobs-retryable-keeps
+  (testing "rescue-stuck-jobs! keeps slot when not exhausted → :retryable in unique_states"
+    (let [opts (unique-opts-with-states job/default-unique-states)
+          j (drip/insert-job *client* "uk_rescue_retry" {:n 1} (merge opts {:max-attempts 3}))
+          _ (drip/fetch-jobs *client* "default" "w" :limit 1)
+          _ (drip/with-tx [tx *client*]
+              (jdbc/execute-one! tx
+                                 ["UPDATE drip_job SET attempted_at = ? WHERE id = ?"
+                                  (db/instant->ts (.minusSeconds (Instant/now) 7200)) (:id j)]))
+          stuck-after (.minusSeconds (Instant/now) 3600)]
+      (drip/with-tx [tx *client*]
+        (drip-client/rescue-stuck-jobs! *client* tx stuck-after job/default-retry-policy nil))
+      (let [rescued (drip/get-job *client* (:id j))]
+        (is (= :retryable (:state rescued)))
+        (is (thrown? Exception (drip/insert-job *client* "uk_rescue_retry" {:n 1} opts)))))))
+
+(deftest unique-key-snooze-keeps
+  (testing "snooze-job! keeps slot when :scheduled in unique_states"
+    (let [opts (unique-opts-with-states job/default-unique-states)
+          j (drip/insert-job *client* "uk_snooze" {:n 1} opts)
+          _ (drip/fetch-jobs *client* "default" "w" :limit 1)]
+      (drip/with-tx [tx *client*]
+        (drip-client/snooze-job! *client* tx (:id j) "1h"))
+      (is (= :scheduled (:state (drip/get-job *client* (:id j)))))
+      (is (thrown? Exception (drip/insert-job *client* "uk_snooze" {:n 1} opts))))))
+
+;; ---------------------------------------------------------------------------
+;; Bitmask per-state boundary tests
+;;
+;; These verify that each state bit is correctly encoded: the slot should be
+;; occupied exactly when the job is in a state that IS in unique_states.
+;; ---------------------------------------------------------------------------
+
+(deftest unique-key-bitmask-available-only
+  (testing "unique_states=#{:available}: PostgreSQL partial index frees slot on transition to :running"
+    ;; On PostgreSQL the partial index only covers :available rows, so fetching (→ :running)
+    ;; immediately frees the slot. On MariaDB/SQLite the plain UNIQUE index keeps the slot
+    ;; occupied until explicit clearing on finalization.
+    (let [opts (unique-opts-with-states #{:available})
+          j (drip/insert-job *client* "uk_bit_avail" {:n 1} opts)]
+      (is (thrown? Exception (drip/insert-job *client* "uk_bit_avail" {:n 1} opts)))
+      (drip/fetch-jobs *client* "default" "w" :limit 1)
+      (is (= :running (:state (drip/get-job *client* (:id j)))))
+      (if (postgres?)
+        (is (some? (drip/insert-job *client* "uk_bit_avail" {:n 1} opts)))
+        (is (thrown? Exception (drip/insert-job *client* "uk_bit_avail" {:n 1} opts)))))))
+
+(deftest unique-key-bitmask-running-only
+  (testing "unique_states=#{:running}: PostgreSQL partial index leaves slot free while :available"
+    ;; On PostgreSQL the partial index only covers :running rows, so re-inserting while the
+    ;; original job is still :available does not conflict. On MariaDB/SQLite the plain UNIQUE
+    ;; index fires immediately regardless of state.
+    (let [opts (unique-opts-with-states #{:running})
+          j (drip/insert-job *client* "uk_bit_run" {:n 1} opts)]
+      (if (postgres?)
+        (do
+          ;; In :available — not covered by partial index → re-insert allowed
+          (is (some? (drip/insert-job *client* "uk_bit_run" {:n 1} opts)))
+          ;; Fetch both → :running — now covered; third insert conflicts
+          (drip/fetch-jobs *client* "default" "w" :limit 2)
+          (is (= :running (:state (drip/get-job *client* (:id j)))))
+          (is (thrown? Exception (drip/insert-job *client* "uk_bit_run" {:n 1} opts))))
+        ;; MariaDB/SQLite: plain UNIQUE index fires immediately
+        (is (thrown? Exception (drip/insert-job *client* "uk_bit_run" {:n 1} opts)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Unique jobs
