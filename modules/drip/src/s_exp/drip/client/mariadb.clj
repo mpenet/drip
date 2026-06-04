@@ -434,6 +434,35 @@
                    ["SELECT * FROM drip_queue ORDER BY name"]
                    db/jdbc-opts))
 
+  client/FastBulkInsert
+  (insert-many-fast! [{:keys [ds]} job-specs]
+    (if (empty? job-specs)
+      0
+      (let [now (Instant/now)
+            placeholder "(0, '[]', ?, '[]', ?, ?, ?, ?, ?, ?, ?, '[]', 0)"
+            sql (str "INSERT INTO drip_job "
+                     "(attempt, attempted_by, encoded_args, errors, "
+                     "kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags, ephemeral) "
+                     "VALUES "
+                     (str/join "," (repeat (count job-specs) placeholder)))
+            params (into []
+                         (mapcat (fn [[kind args opts]]
+                                   (let [opts (merge job/default-insert-opts opts)
+                                         scheduled-at (or (:scheduled-at opts) now)
+                                         state (if (.isAfter ^Instant scheduled-at now) "scheduled" "available")]
+                                     [(db/->json-str args)
+                                      kind
+                                      (int (:max-attempts opts))
+                                      (db/->json-str (:metadata opts))
+                                      (int (:priority opts))
+                                      (:queue opts)
+                                      (encode-ts scheduled-at)
+                                      state]))
+                                 job-specs))]
+        (with-open [conn (.getConnection ^javax.sql.DataSource ds)]
+          (long (:next.jdbc/update-count
+                 (jdbc/execute-one! conn (into [sql] params) {})))))))
+
   client/Maintenance
   (reindex! [_] {}))
 

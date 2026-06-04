@@ -998,13 +998,21 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest insert-many-fast-test
-  (testing "inserts jobs via COPY and they are fetchable"
-    (when (= "s_exp.drip.client.postgres.PostgresClient" (.getName (class *client*)))
-      (let [n 100
-            job-specs (mapv (fn [i] ["fast_kind" {:i i} {:queue "default"}]) (range n))
-            inserted (with-open [conn (.getConnection ^javax.sql.DataSource (:ds *client*))]
-                       (drip/insert-many-fast! conn job-specs))
-            listed (drip/list-jobs *client* {:kind "fast_kind" :limit (+ n 10)})]
-        (is (= n inserted))
-        (is (= n (count listed)))
-        (is (every? #(= :available (:state %)) listed))))))
+  (testing "inserts jobs and they are fetchable"
+    (let [n 100
+          job-specs (mapv (fn [i] ["fast_kind" {:i i} {:queue "default"}]) (range n))
+          inserted (drip/insert-many-fast! *client* job-specs)
+          listed (drip/list-jobs *client* {:kind "fast_kind" :limit (+ n 10)})]
+      (is (= n inserted))
+      (is (= n (count listed)))
+      (is (every? #(= :available (:state %)) listed))))
+
+  (testing "empty job-specs returns 0"
+    (is (= 0 (drip/insert-many-fast! *client* []))))
+
+  (testing "respects scheduled-at"
+    (let [future-at (.plusSeconds (java.time.Instant/now) 3600)
+          _ (drip/insert-many-fast! *client* [["fast_sched" {:x 1} {:scheduled-at future-at}]])
+          listed (drip/list-jobs *client* {:kind "fast_sched"})]
+      (is (= 1 (count listed)))
+      (is (= :scheduled (:state (first listed)))))))

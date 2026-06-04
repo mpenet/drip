@@ -132,20 +132,16 @@
         job-specs))
 
 (defn insert-many-fast!
-  "PostgreSQL only. High-throughput batch insert using COPY FROM STDIN.
-   `conn` must be a raw java.sql.Connection — obtain one from the DataSource directly:
-     (with-open [conn (.getConnection (:ds client))]
-       (drip/insert-many-fast! conn job-specs))
+  "High-throughput batch insert.
    `job-specs` - sequence of [kind args opts] tuples.
    Returns the number of rows inserted (long).
    Limitations vs insert-many:
      - Does not support :unique-opts deduplication
      - Does not return Job records
-     - PostgreSQL only (uses org.postgresql.copy.CopyManager)"
-  [conn job-specs]
-  (let [pg-ns 's-exp.drip.client.postgres]
-    (require pg-ns)
-    ((ns-resolve (find-ns pg-ns) 'insert-many-fast!) conn job-specs)))
+     - :tags and :ephemeral opts are ignored
+   PostgreSQL uses COPY FROM STDIN. MariaDB and SQLite use multi-row INSERT."
+  [client job-specs]
+  (client/insert-many-fast! client job-specs))
 
 (defn fetch-jobs
   "Atomically claims up to limit available jobs from queue.

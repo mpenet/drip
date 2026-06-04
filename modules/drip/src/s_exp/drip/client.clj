@@ -93,6 +93,13 @@
        :limit            - max rows (default 100)
        :after            - job ID cursor; returns jobs with id < after (for DESC pagination)"))
 
+(defprotocol FastBulkInsert
+  (insert-many-fast! [client job-specs]
+    "High-throughput batch insert. job-specs is a sequence of [kind args opts] tuples.
+     Returns number of rows inserted (long).
+     Limitations: no :unique-opts, no :tags, no :ephemeral, no returned Job records.
+     PostgreSQL uses COPY FROM STDIN; MariaDB and SQLite use multi-row INSERT."))
+
 (defprotocol Maintenance
   (reindex! [client]
     "Rebuilds database indexes to recover bloat. Only meaningful on PostgreSQL

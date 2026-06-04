@@ -117,6 +117,48 @@
   (db/instant->ts i))
 
 ;; ---------------------------------------------------------------------------
+;; COPY-based fast batch insert helpers
+;;
+;; Uses PostgreSQL COPY FROM STDIN (text format) for high-throughput insertion.
+;; No RETURNING — caller gets the inserted count, not Job records.
+;; Does NOT support unique_key deduplication (same limitation as River's InsertManyFast).
+;;
+;; Text format rules:
+;;   - columns tab-separated
+;;   - rows newline-terminated (\n)
+;;   - NULL represented as \N
+;;   - literal tab/newline/backslash in values must be escaped: \t \n \\
+;; ---------------------------------------------------------------------------
+
+(defn- copy-escape ^String [^String s]
+  (when s
+    (-> s
+        (.replace "\\" "\\\\")
+        (.replace "\t" "\\t")
+        (.replace "\n" "\\n")
+        (.replace "\r" "\\r"))))
+
+(defn- append-copy-row [^StringBuilder sb kind args opts ^Instant now]
+  (let [opts (merge job/default-insert-opts opts)
+        queue (:queue opts)
+        scheduled-at (or (:scheduled-at opts) now)
+        initial-state (if (.isAfter ^Instant scheduled-at now) "scheduled" "available")]
+    (doto sb
+      (.append initial-state) (.append \tab)
+      (.append "0") (.append \tab)
+      (.append (int (:max-attempts opts))) (.append \tab)
+      (.append (str (encode-ts scheduled-at))) (.append \tab)
+      (.append (int (:priority opts))) (.append \tab)
+      (.append (copy-escape (db/->json-str args))) (.append \tab)
+      (.append "{}") (.append \tab) ; attempted_by (text[])
+      (.append "{}") (.append \tab) ; errors (jsonb[])
+      (.append (copy-escape kind)) (.append \tab)
+      (.append (copy-escape (db/->json-str (:metadata opts)))) (.append \tab)
+      (.append (copy-escape queue)) (.append \tab)
+      (.append "{}") ; tags (text[])
+      (.append \newline))))
+
+;; ---------------------------------------------------------------------------
 ;; Client record
 ;; ---------------------------------------------------------------------------
 
@@ -516,6 +558,18 @@
   (list-queues! [_ tx]
     (jdbc/execute! tx ["SELECT * FROM drip_queue ORDER BY name"] db/jdbc-opts))
 
+  client/FastBulkInsert
+  (insert-many-fast! [{:keys [ds]} job-specs]
+    (let [now (Instant/now)
+          sb (StringBuilder.)
+          _ (doseq [[kind args opts] job-specs] (append-copy-row sb kind args opts now))
+          data (.getBytes (.toString sb) ^java.nio.charset.Charset StandardCharsets/UTF_8)
+          in (ByteArrayInputStream. data)]
+      (with-open [conn (.getConnection ^javax.sql.DataSource ds)]
+        (long (.copyIn ^CopyManager (.getCopyAPI (pg-conn conn))
+                       "COPY drip_job (state, attempt, max_attempts, scheduled_at, priority, args, attempted_by, errors, kind, metadata, queue, tags) FROM STDIN"
+                       in)))))
+
   client/Maintenance
   (reindex! [{:keys [ds]}]
     (let [index-names ["drip_job_prioritized_fetching_index"
@@ -548,66 +602,6 @@
                               :reindexed)))))
          {}
          index-names)))))
-
-;; ---------------------------------------------------------------------------
-;; COPY-based fast batch insert
-;;
-;; Uses PostgreSQL COPY FROM STDIN (text format) for high-throughput insertion.
-;; No RETURNING — caller gets the inserted count, not Job records.
-;; Does NOT support unique_key deduplication (same limitation as River's InsertManyFast).
-;;
-;; Text format rules:
-;;   - columns tab-separated
-;;   - rows newline-terminated (\n)
-;;   - NULL represented as \N
-;;   - literal tab/newline/backslash in values must be escaped: \t \n \\
-;; ---------------------------------------------------------------------------
-
-(defn- copy-escape ^String [^String s]
-  (when s
-    (-> s
-        (.replace "\\" "\\\\")
-        (.replace "\t" "\\t")
-        (.replace "\n" "\\n")
-        (.replace "\r" "\\r"))))
-
-(defn- append-copy-row [^StringBuilder sb kind args opts ^Instant now]
-  (let [opts (merge job/default-insert-opts opts)
-        queue (:queue opts)
-        scheduled-at (or (:scheduled-at opts) now)
-        initial-state (if (.isAfter ^Instant scheduled-at now) "scheduled" "available")]
-    (doto sb
-      (.append initial-state) (.append \tab)
-      (.append "0") (.append \tab)
-      (.append (int (:max-attempts opts))) (.append \tab)
-      (.append (str (encode-ts scheduled-at))) (.append \tab)
-      (.append (int (:priority opts))) (.append \tab)
-      (.append (copy-escape (db/->json-str args))) (.append \tab)
-      (.append "{}") (.append \tab) ; attempted_by (text[])
-      (.append "{}") (.append \tab) ; errors (jsonb[])
-      (.append (copy-escape kind)) (.append \tab)
-      (.append (copy-escape (db/->json-str (:metadata opts)))) (.append \tab)
-      (.append (copy-escape queue)) (.append \tab)
-      (.append "{}") ; tags (text[])
-      (.append \newline))))
-
-(defn insert-many-fast!
-  "High-throughput batch insert using PostgreSQL COPY FROM STDIN.
-   `conn` must be a java.sql.Connection (unwrapped, not inside next.jdbc tx).
-   `job-specs` - sequence of [kind args opts] tuples.
-   Returns the number of rows inserted.
-   Does NOT support :unique-opts deduplication.
-   Does NOT return Job records — use insert-many for that."
-  ^long [^Connection conn job-specs]
-  (let [now (Instant/now)
-        ^CopyManager cm (.getCopyAPI (pg-conn conn))
-        sb (StringBuilder.)
-        _ (doseq [[kind args opts] job-specs] (append-copy-row sb kind args opts now))
-        data (.getBytes (.toString sb) ^java.nio.charset.Charset StandardCharsets/UTF_8)
-        in (ByteArrayInputStream. data)]
-    (.copyIn cm
-             "COPY drip_job (state, attempt, max_attempts, scheduled_at, priority, args, attempted_by, errors, kind, metadata, queue, tags) FROM STDIN"
-             in)))
 
 (defn make-client
   "Returns a PostgreSQL client. `ds` is a javax.sql.DataSource."
