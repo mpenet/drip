@@ -44,7 +44,8 @@
      :tags (db/<-json (:tags row))
      :unique-key (:unique-key row)
      :unique-states (:unique-states row)
-     :ephemeral (= 1 (:ephemeral row))}))
+     :ephemeral (= 1 (:ephemeral row))
+     :timeout-ms (:timeout-ms row)}))
 
 (defrecord SQLiteClient [ds]
   client/Migration
@@ -70,6 +71,7 @@
                            (or (:by-state unique-opts) job/default-unique-states)))
           scheduled-at (or (:scheduled-at opts) now)
           initial-state (if (.isAfter ^Instant scheduled-at now) "scheduled" "available")
+          timeout-ms (when-let [t (:timeout opts)] (long (duration/duration t)))
           result (try
                    (jdbc/execute-one!
                     tx
@@ -77,11 +79,11 @@
                         (attempt, attempted_by, encoded_args, errors,
                          kind, max_attempts, metadata, priority,
                          queue, scheduled_at, state, tags,
-                         unique_key, unique_states, ephemeral)
+                         unique_key, unique_states, ephemeral, timeout_ms)
                       VALUES (0, json_array(), ?, json_array(),
                               ?, ?, ?, ?,
                               ?, ?, ?, ?,
-                              ?, ?, ?)"
+                              ?, ?, ?, ?)"
                      encoded-args
                      kind
                      (int (:max-attempts opts))
@@ -93,7 +95,8 @@
                      (db/->json-str (:tags opts))
                      unique-key
                      unique-states
-                     (if (:ephemeral opts) 1 0)]
+                     (if (:ephemeral opts) 1 0)
+                     timeout-ms]
                     {:return-keys true})
                    (catch SQLiteException e
                      (when-not (= SQLiteErrorCode/SQLITE_CONSTRAINT_UNIQUE (.getResultCode ^SQLiteException e))

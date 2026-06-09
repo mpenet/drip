@@ -52,9 +52,10 @@
           (do (db/with-tx [tx client]
                 (client/discard-job! client tx (:id job)))
               (emit! event-fn (assoc base :type :s-exp.drip.job/discard)))
-          (let [timeout-ms (some-> (get job-timeouts (:kind job) (get job-timeouts :default))
-                                   duration/duration
-                                   long)
+          (let [timeout-ms (or (:timeout-ms job)
+                               (some-> (get job-timeouts (:kind job) (get job-timeouts :default))
+                                       duration/duration
+                                       long))
                 t0 (System/currentTimeMillis)
                 _ (emit! event-fn (assoc base :type :s-exp.drip.job/start))
                 [ok? result-or-ex]

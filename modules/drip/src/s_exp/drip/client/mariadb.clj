@@ -36,7 +36,8 @@
      :tags (db/<-json (:tags row))
      :unique-key (:unique-key row)
      :unique-states (:unique-states row)
-     :ephemeral (boolean (:ephemeral row))}))
+     :ephemeral (boolean (:ephemeral row))
+     :timeout-ms (:timeout-ms row)}))
 
 (defrecord MariaDBClient [ds]
   client/Migration
@@ -61,7 +62,8 @@
                           (job/states->bitmask
                            (or (:by-state unique-opts) job/default-unique-states)))
           scheduled-at (or (:scheduled-at opts) now)
-          initial-state (if (.isAfter ^Instant scheduled-at now) "scheduled" "available")]
+          initial-state (if (.isAfter ^Instant scheduled-at now) "scheduled" "available")
+          timeout-ms (when-let [t (:timeout opts)] (long (duration/duration t)))]
       (try
         (jdbc/execute-one!
          tx
@@ -69,11 +71,11 @@
                (attempt, attempted_by, encoded_args, errors,
                 kind, max_attempts, metadata, priority,
                 queue, scheduled_at, state, tags,
-                unique_key, unique_states, ephemeral)
+                unique_key, unique_states, ephemeral, timeout_ms)
              VALUES (0, JSON_ARRAY(), ?, JSON_ARRAY(),
                      ?, ?, ?, ?,
                      ?, ?, ?, ?,
-                     ?, ?, ?)"
+                     ?, ?, ?, ?)"
           encoded-args
           kind
           (int (:max-attempts opts))
@@ -85,7 +87,8 @@
           (db/->json-str (:tags opts))
           unique-key
           unique-states
-          (if (:ephemeral opts) 1 0)]
+          (if (:ephemeral opts) 1 0)
+          timeout-ms]
          {})
         (let [inserted-id (-> (jdbc/execute-one! tx
                                                  ["SELECT LAST_INSERT_ID() AS id"]

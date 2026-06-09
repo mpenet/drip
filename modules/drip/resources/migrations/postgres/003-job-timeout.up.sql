@@ -1,0 +1,1 @@
+ALTER TABLE drip_job ADD COLUMN timeout_ms BIGINT NULL;

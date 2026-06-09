@@ -103,7 +103,8 @@
      :tags (pg-array->vec (:tags row))
      :unique-key (:unique-key row)
      :unique-states (:unique-states row)
-     :ephemeral (boolean (:ephemeral row))}))
+     :ephemeral (boolean (:ephemeral row))
+     :timeout-ms (:timeout-ms row)}))
 
 ;; ---------------------------------------------------------------------------
 ;; Helpers
@@ -199,6 +200,7 @@
           scheduled-at (or (:scheduled-at opts) now)
           initial-state (if (.isAfter ^Instant scheduled-at now) "scheduled" "available")
           tags-arr ^"[Ljava.lang.String;" (into-array String (map str (:tags opts)))
+          timeout-ms (when-let [t (:timeout opts)] (long (duration/duration t)))
           result (try
                    (jdbc/execute-one!
                     tx
@@ -206,11 +208,11 @@
                         (state, attempt, max_attempts, scheduled_at, priority,
                          args, attempted_by, errors,
                          kind, metadata, queue, tags,
-                         unique_key, unique_states, ephemeral)
+                         unique_key, unique_states, ephemeral, timeout_ms)
                       VALUES (?::drip_job_state, 0, ?, ?, ?,
                               ?::jsonb, '{}', '{}',
                               ?, ?::jsonb, ?, ?,
-                              ?, ?::bit(8), ?)
+                              ?, ?::bit(8), ?, ?)
                       RETURNING *"
                      initial-state
                      (int (:max-attempts opts))
@@ -223,7 +225,8 @@
                      tags-arr
                      unique-key
                      unique-states-str
-                     (boolean (:ephemeral opts))]
+                     (boolean (:ephemeral opts))
+                     timeout-ms]
                     db/jdbc-opts)
                    (catch java.sql.SQLException e
                      (when-not (db/unique-conflict-sql-states (.getSQLState e))

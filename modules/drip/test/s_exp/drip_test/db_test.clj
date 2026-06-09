@@ -994,6 +994,28 @@
       (is (= :scheduled (:state snoozed))))))
 
 ;; ---------------------------------------------------------------------------
+;; Per-job timeout
+;; ---------------------------------------------------------------------------
+
+(deftest insert-job-timeout-test
+  (testing "duration string stored as :timeout-ms in milliseconds"
+    (let [j (drip/insert-job *client* "timeout_str" {:x 1} {:timeout "30s"})]
+      (is (= 30000 (:timeout-ms j)))))
+
+  (testing "millisecond number stored as :timeout-ms"
+    (let [j (drip/insert-job *client* "timeout_ms" {:x 1} {:timeout 5000})]
+      (is (= 5000 (:timeout-ms j)))))
+
+  (testing "no :timeout → nil :timeout-ms"
+    (let [j (drip/insert-job *client* "timeout_nil" {} nil)]
+      (is (nil? (:timeout-ms j)))))
+
+  (testing ":timeout-ms round-trips through get-job"
+    (let [j (drip/insert-job *client* "timeout_fetch" {} {:timeout "1m"})
+          fetched (drip/get-job *client* (:id j))]
+      (is (= 60000 (:timeout-ms fetched))))))
+
+;; ---------------------------------------------------------------------------
 ;; insert-many-fast! (PostgreSQL only)
 ;; ---------------------------------------------------------------------------
 

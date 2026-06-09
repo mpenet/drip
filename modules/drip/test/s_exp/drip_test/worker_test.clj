@@ -306,6 +306,51 @@
       (is (= 500 (get (:job-timeouts ex) "slow_kind")))
       (drip/stop-worker! ex :timeout "1s"))))
 
+(deftest per-job-timeout-overrides-worker-config
+  (testing "per-job :timeout fires even when :job-timeouts would not"
+    (let [started (promise)
+          registry {"pjt_override" (fn [_ _job]
+                                     (deliver started true)
+                                     (Thread/sleep 10000))}
+          ex (worker/start-worker!
+              {:client *client*
+               :registry registry
+               :job-timeouts {:default "60s"}
+               :poll-interval 50})]
+      (try
+        (drip/insert-job *client* "pjt_override" {} {:timeout 200})
+        (deref started 5000 nil)
+        (Thread/sleep 500)
+        (worker/stop-worker! ex :timeout "5s")
+        (let [job (first (drip/list-jobs *client* {:kind "pjt_override"}))]
+          (is (some? job))
+          (is (contains? #{:retryable :discarded} (:state job)))
+          (is (str/includes? (:error (first (:errors job))) "timed out")))
+        (finally
+          (try (worker/stop-worker! ex :timeout "1s") (catch Exception _ nil))))))
+
+  (testing "job without :timeout falls back to worker :job-timeouts"
+    (let [started (promise)
+          registry {"pjt_fallback" (fn [_ _job]
+                                     (deliver started true)
+                                     (Thread/sleep 10000))}
+          ex (worker/start-worker!
+              {:client *client*
+               :registry registry
+               :job-timeouts {:default 200}
+               :poll-interval 50})]
+      (try
+        (drip/insert-job *client* "pjt_fallback" {} nil)
+        (deref started 5000 nil)
+        (Thread/sleep 500)
+        (worker/stop-worker! ex :timeout "5s")
+        (let [job (first (drip/list-jobs *client* {:kind "pjt_fallback"}))]
+          (is (some? job))
+          (is (contains? #{:retryable :discarded} (:state job)))
+          (is (str/includes? (:error (first (:errors job))) "timed out")))
+        (finally
+          (try (worker/stop-worker! ex :timeout "1s") (catch Exception _ nil)))))))
+
 (deftest maintenance-worker-rescue-test
   (testing "maintenance worker rescues a stuck running job"
     (let [j (drip/insert-job *client* "k" {} {:max-attempts 3 :queue "maint-rescue-q"})

@@ -92,7 +92,10 @@
      :unique-opts  - map for unique job constraints
      :ephemeral    - if true, job is deleted immediately on successful completion
                      instead of transitioning to :completed. Failures behave normally.
-                     Default: false"
+                     Default: false
+     :timeout      - per-job timeout override; duration string or ms number.
+                     Overrides :job-timeouts in the worker config for this specific job.
+                     nil = use worker-level :job-timeouts (default)"
   [client kind args & {:as opts}]
   (let [job (with-tx [tx client]
               (client/insert-job! client tx kind args opts))]
@@ -424,7 +427,8 @@
 
    Key options:
      :retry-policies - {:default policy-fn, \"kind\" policy-fn} unified retry map
-     :job-timeouts   - {:default timeout, \"kind\" timeout} unified timeout map; duration string or ms (nil = no timeout)
+     :job-timeouts   - {:default timeout, \"kind\" timeout} unified timeout map; duration string or ms (nil = no timeout).
+                       Per-job :timeout set at insert time takes precedence over this config.
      :executor       - optional ExecutorService for job dispatch (default: virtual-thread-per-task)
      :event-fn       - (fn [event]) observability hook for metrics/tracing/logging
 
