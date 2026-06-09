@@ -69,7 +69,7 @@ org.xerial/sqlite-jdbc {:mvn/version "3.45.3.0"}
    :body    "Thanks for signing up."})
 
 ;; 7. Shut down gracefully (waits up to 30s for in-flight jobs)
-(drip/stop-worker! executor)
+(drip/stop-worker! worker)
 ```
 
 ## Creating a client
@@ -96,7 +96,7 @@ The client record is passed to every Drip function. It holds the datasource and 
 
 Creates three tables — `drip_job`, `drip_queue`, `drip_migration` — and the indexes needed for efficient fetching. Managed by [migratus](https://github.com/yogthos/migratus); fully idempotent. Call it on every application startup.
 
-Migration SQL lives in `resources/migrations/<dialect>/001-initial-schema.up.sql` in the Drip jar. You can inspect it there.
+Migration SQL lives in `resources/migrations/<dialect>/` in the Drip jar (one file per version: `001-initial-schema`, `002-ephemeral`, `003-job-timeout`, `004-job-ttl`). You can inspect them there.
 
 ## Component lifecycle
 
@@ -115,7 +115,7 @@ A typical component-based startup (works with Component, Integrant etc):
 For immediate shutdown that doesn't wait for in-flight jobs:
 
 ```clojure
-(drip/stop-and-cancel! executor)
+(drip/stop-and-cancel! worker)
 ;; In-flight jobs remain :running; they will be rescued on next executor startup.
 ```
 
@@ -128,7 +128,7 @@ For immediate shutdown that doesn't wait for in-flight jobs:
 | `s-exp.drip.client.postgres` | PostgreSQL client constructor |
 | `s-exp.drip.client.sqlite` | SQLite client constructor |
 | `s-exp.drip.job` | Job record, states, retry policy |
-| `s-exp.drip.worker` | Executor internals (rarely needed directly) |
+| `s-exp.drip.worker` | Worker internals (rarely needed directly) |
 | `s-exp.drip.periodic` | Periodic job scheduler internals |
 
 In nearly all cases you only need `s-exp.drip` and one dialect namespace.

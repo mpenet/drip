@@ -34,6 +34,9 @@ The central table. Each row is one job.
 | `tags` | `varchar(255)[]` | `JSON` (array) | `TEXT` (JSON array) | String labels |
 | `unique_key` | `bytea` | `VARBINARY(32)` | `BLOB` | SHA-256 dedup key (NULL = no constraint) |
 | `unique_states` | `BIT(8)` | `SMALLINT` | `INTEGER` | Bitmask of states where uniqueness is enforced |
+| `ephemeral` | `boolean` | `TINYINT(1)` | `INTEGER` | If 1, row is deleted immediately on successful completion |
+| `timeout_ms` | `bigint` | `BIGINT` | `BIGINT` | Per-job execution timeout in milliseconds (NULL = use worker config) |
+| `ttl_ms` | `bigint` | `BIGINT` | `BIGINT` | Time-to-live in milliseconds; job expires when `created_at + ttl_ms <= now` (NULL = no TTL) |
 
 ### Constraints (PostgreSQL)
 
@@ -101,7 +104,7 @@ PostgreSQL uses a `BIT(8)` column and a helper function `drip_job_state_in_bitma
 | `created_at` | timestamptz / DATETIME(6) / TEXT | When the migration was applied |
 | `version` | bigint / BIGINT / INTEGER | Migration version number (unique) |
 
-Managed by [migratus](https://github.com/yogthos/migratus). `migrate!` records each applied version here; already-applied versions are skipped on subsequent startups. Currently only version `1` exists.
+Managed by [migratus](https://github.com/yogthos/migratus). `migrate!` records each applied version here; already-applied versions are skipped on subsequent startups. Current migrations: `001-initial-schema`, `002-ephemeral`, `003-job-timeout`, `004-job-ttl`.
 
 ## PostgreSQL-specific: LISTEN/NOTIFY
 

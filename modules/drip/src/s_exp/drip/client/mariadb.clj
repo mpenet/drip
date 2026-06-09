@@ -37,7 +37,8 @@
      :unique-key (:unique-key row)
      :unique-states (:unique-states row)
      :ephemeral (boolean (:ephemeral row))
-     :timeout-ms (:timeout-ms row)}))
+     :timeout (:timeout-ms row)
+     :ttl (:ttl-ms row)}))
 
 (defrecord MariaDBClient [ds]
   client/Migration
@@ -63,7 +64,8 @@
                            (or (:by-state unique-opts) job/default-unique-states)))
           scheduled-at (or (:scheduled-at opts) now)
           initial-state (if (.isAfter ^Instant scheduled-at now) "scheduled" "available")
-          timeout-ms (when-let [t (:timeout opts)] (long (duration/duration t)))]
+          timeout-ms (when-let [t (:timeout opts)] (long (duration/duration t)))
+          ttl-ms (when-let [t (:ttl opts)] (long (duration/duration t)))]
       (try
         (jdbc/execute-one!
          tx
@@ -71,11 +73,11 @@
                (attempt, attempted_by, encoded_args, errors,
                 kind, max_attempts, metadata, priority,
                 queue, scheduled_at, state, tags,
-                unique_key, unique_states, ephemeral, timeout_ms)
+                unique_key, unique_states, ephemeral, timeout_ms, ttl_ms)
              VALUES (0, JSON_ARRAY(), ?, JSON_ARRAY(),
                      ?, ?, ?, ?,
                      ?, ?, ?, ?,
-                     ?, ?, ?, ?)"
+                     ?, ?, ?, ?, ?)"
           encoded-args
           kind
           (int (:max-attempts opts))
@@ -88,7 +90,8 @@
           unique-key
           unique-states
           (if (:ephemeral opts) 1 0)
-          timeout-ms]
+          timeout-ms
+          ttl-ms]
          {})
         (let [inserted-id (-> (jdbc/execute-one! tx
                                                  ["SELECT LAST_INSERT_ID() AS id"]
@@ -400,6 +403,20 @@
                    (str/join " AND " conditions)
                    " ORDER BY id DESC LIMIT " (int limit))]
       (mapv row->job (jdbc/execute! tx (into [sql] params) db/jdbc-opts))))
+
+  (expire-ttl-jobs! [_ tx]
+    (let [now (encode-ts (Instant/now))
+          result (jdbc/execute-one!
+                  tx
+                  ["UPDATE drip_job
+                     SET state = 'discarded',
+                         finalized_at = ?,
+                         unique_key = CASE WHEN unique_states IS NOT NULL AND (unique_states & 16) = 0 THEN NULL ELSE unique_key END
+                     WHERE state IN ('available','scheduled','retryable')
+                       AND ttl_ms IS NOT NULL
+                       AND TIMESTAMPADD(MICROSECOND, ttl_ms * 1000, created_at) <= NOW(6)"
+                   now])]
+      (:next.jdbc/update-count result 0)))
 
   client/Queues
   (upsert-queue! [_ tx queue-name metadata]

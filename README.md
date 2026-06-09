@@ -106,7 +106,7 @@ Full documentation is in the [`doc/`](doc/) directory:
 
 - [Getting Started](doc/01-getting-started.md) — installation, client setup, migrations, lifecycle
 - [Jobs](doc/02-jobs.md) — inserting, querying, updating, unique constraints, retries
-- [Workers and the Executor](doc/03-workers.md) — registry, concurrency, retry policies, timeouts, maintenance worker (rescue, retention, reindex)
+- [Workers](doc/03-workers.md) — registry, concurrency, retry policies, timeouts, maintenance worker (rescue, retention, reindex)
 - [Queues](doc/04-queues.md) — pause/resume, multi-queue routing
 - [Periodic Jobs](doc/05-periodic-jobs.md) — fixed-interval scheduling, deduplication
 - [Patterns](doc/06-patterns.md) — transactional enqueue, outbox, fanout, chaining, testing
@@ -329,7 +329,7 @@ Persist a handler's result into the job's `metadata` column under the `"output"`
 (get-in (drip/get-job client job-id) [:metadata "output"])
 ```
 
-### Executor options
+### Worker options
 
 ```clojure
 (drip/start-worker!

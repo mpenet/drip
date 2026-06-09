@@ -244,6 +244,112 @@
           (try (drip/stop-maintenance-worker! mw :timeout "1s") (catch Exception _ nil)))))))
 
 ;; ---------------------------------------------------------------------------
+;; TTL expiry
+;; ---------------------------------------------------------------------------
+
+(defn- expire-ttl! [job-id]
+  (drip/with-tx [tx *client*]
+    (jdbc/execute-one! tx ["UPDATE drip_job SET ttl_ms = 0 WHERE id = ?" job-id])))
+
+(deftest ttl-expiry-discards-expired-available
+  (testing "available job past its ttl is discarded"
+    (let [j (drip/insert-job *client* "ttl_avail" {} {:ttl "1h"})
+          _ (expire-ttl! (:id j))]
+      (drip/with-tx [tx *client*]
+        (#'maintenance/run-ttl-expiry *client* tx))
+      (let [expired (drip/get-job *client* (:id j))]
+        (is (= :discarded (:state expired)))
+        (is (some? (:finalized-at expired)))))))
+
+(deftest ttl-expiry-discards-expired-scheduled
+  (testing "scheduled job past its ttl is discarded"
+    (let [j (drip/insert-job *client* "ttl_sched" {}
+                             {:ttl "1h"
+                              :scheduled-at (.plusSeconds (Instant/now) 3600)})
+          _ (expire-ttl! (:id j))]
+      (drip/with-tx [tx *client*]
+        (#'maintenance/run-ttl-expiry *client* tx))
+      (is (= :discarded (:state (drip/get-job *client* (:id j))))))))
+
+(deftest ttl-expiry-discards-expired-retryable
+  (testing "retryable job past its ttl is discarded"
+    (let [j (drip/insert-job *client* "ttl_retry" {} {:ttl "1h" :max-attempts 3})
+          _ (drip/fetch-jobs *client* "default" "w" :limit 1)
+          _ (drip/with-tx [tx *client*]
+              (drip-client/fail-job! *client* tx (:id j) {:error "x"} job/default-retry-policy))
+          _ (expire-ttl! (:id j))]
+      (drip/with-tx [tx *client*]
+        (#'maintenance/run-ttl-expiry *client* tx))
+      (is (= :discarded (:state (drip/get-job *client* (:id j))))))))
+
+(deftest ttl-expiry-keeps-unexpired
+  (testing "job with ttl in the future is not discarded"
+    (let [j (drip/insert-job *client* "ttl_future" {} {:ttl "1h"})]
+      (drip/with-tx [tx *client*]
+        (#'maintenance/run-ttl-expiry *client* tx))
+      (is (= :available (:state (drip/get-job *client* (:id j))))))))
+
+(deftest ttl-expiry-ignores-nil-ttl
+  (testing "job with no ttl is not discarded"
+    (let [j (drip/insert-job *client* "ttl_no_ttl" {} nil)]
+      (drip/with-tx [tx *client*]
+        (#'maintenance/run-ttl-expiry *client* tx))
+      (is (= :available (:state (drip/get-job *client* (:id j))))))))
+
+(deftest ttl-expiry-does-not-affect-running
+  (testing "running job past its ttl is not discarded by expiry"
+    (let [j (drip/insert-job *client* "ttl_running" {} {:ttl "1h"})
+          _ (drip/fetch-jobs *client* "default" "w" :limit 1)
+          _ (expire-ttl! (:id j))]
+      (drip/with-tx [tx *client*]
+        (#'maintenance/run-ttl-expiry *client* tx))
+      (is (= :running (:state (drip/get-job *client* (:id j))))))))
+
+(deftest ttl-expiry-returns-count
+  (testing "returns number of expired jobs"
+    (let [j1 (drip/insert-job *client* "ttl_count" {} {:ttl "1h"})
+          j2 (drip/insert-job *client* "ttl_count" {} {:ttl "1h"})
+          _ (expire-ttl! (:id j1))
+          _ (expire-ttl! (:id j2))
+          n (drip/with-tx [tx *client*]
+              (#'maintenance/run-ttl-expiry *client* tx))]
+      (is (= 2 n)))))
+
+(deftest maintenance-worker-ttl-integration
+  (testing "maintenance worker with :ttl-interval discards expired jobs"
+    (let [j (drip/insert-job *client* "ttl_mw" {} {:ttl "1h"})
+          _ (expire-ttl! (:id j))
+          mw (drip/start-maintenance-worker!
+              {:client *client*
+               :rescue-after nil
+               :retention nil
+               :ttl-interval 50})]
+      (try
+        (Thread/sleep 300)
+        (drip/stop-maintenance-worker! mw :timeout "5s")
+        (is (= :discarded (:state (drip/get-job *client* (:id j)))))
+        (finally
+          (try (drip/stop-maintenance-worker! mw :timeout "1s") (catch Exception _ nil))))))
+
+  (testing "nil :ttl-interval — ttl-scheduler is nil"
+    (let [mw (maintenance/start-maintenance-worker!
+              {:client *client*
+               :rescue-after nil
+               :retention nil
+               :ttl-interval nil})]
+      (is (nil? (:ttl-scheduler mw)))
+      (maintenance/stop-maintenance-worker! mw :timeout "1s")))
+
+  (testing ":ttl-interval set — ttl-scheduler is non-nil"
+    (let [mw (maintenance/start-maintenance-worker!
+              {:client *client*
+               :rescue-after nil
+               :retention nil
+               :ttl-interval 999999})]
+      (is (some? (:ttl-scheduler mw)))
+      (maintenance/stop-maintenance-worker! mw :timeout "1s"))))
+
+;; ---------------------------------------------------------------------------
 ;; reindex! (PostgreSQL only)
 ;; ---------------------------------------------------------------------------
 

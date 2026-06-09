@@ -91,7 +91,11 @@
        :scheduled-after  - java.time.Instant lower bound on scheduled_at (inclusive)
        :scheduled-before - java.time.Instant upper bound on scheduled_at (inclusive)
        :limit            - max rows (default 100)
-       :after            - job ID cursor; returns jobs with id < after (for DESC pagination)"))
+       :after            - job ID cursor; returns jobs with id < after (for DESC pagination)")
+  (expire-ttl-jobs! [client tx]
+    "Discards all non-running jobs whose created_at + ttl_ms <= now.
+     Targets :available, :scheduled, and :retryable states only.
+     Returns count of expired jobs."))
 
 (defprotocol FastBulkInsert
   (insert-many-fast! [client job-specs]

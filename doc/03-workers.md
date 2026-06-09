@@ -76,8 +76,8 @@ Rescue, retention, and reindex are handled by the [maintenance worker](#maintena
 Waits for in-flight jobs to finish, up to a timeout:
 
 ```clojure
-(drip/stop-worker! executor)                     ; default 30s timeout
-(drip/stop-worker! executor :timeout "60s")      ; custom timeout
+(drip/stop-worker! worker)                     ; default 30s timeout
+(drip/stop-worker! worker :timeout "60s")      ; custom timeout
 ;; returns true if clean, false if timed out
 ```
 
@@ -88,10 +88,10 @@ In-flight jobs that finish before the timeout are marked `:completed` or `:retry
 Interrupts all in-flight virtual threads immediately:
 
 ```clojure
-(drip/stop-and-cancel! executor)
+(drip/stop-and-cancel! worker)
 ```
 
-In-flight jobs remain in `:running` state. On the next executor startup (or if another executor is running), `rescue-stuck-jobs!` will requeue them based on `:rescue-after`.
+In-flight jobs remain in `:running` state. On the next worker startup (or if another worker is running), `rescue-stuck-jobs!` will requeue them based on `:rescue-after`.
 
 Use this for fast deploys where you can afford jobs to re-run.
 
@@ -235,6 +235,23 @@ Limit how long a single job can run. When exceeded, the job thread is interrupte
 
 `:default` is the global timeout applied to any kind not listed explicitly. If `:default` is nil (or absent), there is no global timeout. Per-kind entries override `:default` for that kind. Values accept duration strings (`"30s"`, `"2m"`) or plain millisecond numbers.
 
+### Per-job timeout override
+
+A job can carry its own timeout, set at insert time with `:timeout`. It takes full precedence over `:job-timeouts`:
+
+```clojure
+;; Worker defaults to 30s
+(drip/start-worker! {:client client :registry registry :job-timeouts {:default "30s"}})
+
+;; This job gets 5 minutes, ignoring the worker config
+(drip/insert-job client "generate_report" {:range "yearly"} :timeout "5m")
+
+;; This job uses the worker's 30s default (no override)
+(drip/insert-job client "generate_report" {:range "daily"})
+```
+
+See [Per-job timeout](02-jobs.md#per-job-timeout) in the Jobs guide for full details.
+
 ## Observability
 
 Pass `:event-fn` to receive a callback for every worker event. Useful for metrics, tracing, and structured logging. Exceptions thrown by the fn are swallowed — it will never affect job processing.
@@ -273,6 +290,7 @@ The maintenance worker also accepts `:event-fn`. Events fire after each task com
 | `:s-exp.drip.maintenance/rescue` | `:duration-ms` (`:error` on failure) |
 | `:s-exp.drip.maintenance/retention` | `:duration-ms` (`:error` on failure) |
 | `:s-exp.drip.maintenance/reindex` | `:duration-ms` `:results` (`:error` on failure) |
+| `:s-exp.drip.maintenance/ttl-expiry` | `:duration-ms` `:count` (`:error` on failure) |
 
 ## Maintenance worker
 
@@ -300,6 +318,9 @@ Rescue, retention cleanup, and index maintenance run in a separate `MaintenanceW
      ;; Reindex (PostgreSQL only, no-op on others)
      :reindex-interval "24h"            ; nil = disabled (default)
 
+     ;; TTL expiry — discard unstarted jobs whose created_at + ttl_ms <= now
+     :ttl-interval "1m"                 ; nil = disabled (default)
+
      ;; Which queues rescue/retention apply to
      :queues ["default" "fast" "slow"]}))
 
@@ -326,6 +347,24 @@ Retention deletes finalized jobs older than the configured windows. `:default` i
 ```
 
 Values accept duration strings or raw milliseconds. Set a state to `nil` to disable cleanup for that state.
+
+### TTL expiry
+
+When `:ttl-interval` is set, the maintenance worker periodically discards jobs that have exceeded their TTL. It targets `:available`, `:scheduled`, and `:retryable` jobs whose `created_at + ttl_ms <= now`. Running jobs are never expired mid-execution.
+
+```clojure
+;; Job inserted with a 10-minute TTL
+(drip/insert-job client "send_push" {:user-id 42} :ttl "10m")
+
+;; Maintenance worker will discard it if still unstarted after 10 minutes
+(drip/start-maintenance-worker!
+  {:client       client
+   :ttl-interval "1m"})
+```
+
+TTL expiry fires `:s-exp.drip.maintenance/ttl-expiry` events with `:count` (number of jobs expired per run).
+
+See [Job TTL](02-jobs.md#job-ttl) in the Jobs guide for insert-time details and behavior by state.
 
 ### Reindex (PostgreSQL only)
 

@@ -70,6 +70,13 @@
           (rescue! default-dur global-qs))))))
 
 ;; ---------------------------------------------------------------------------
+;; TTL expiry
+;; ---------------------------------------------------------------------------
+
+(defn- run-ttl-expiry [c tx]
+  (client/expire-ttl-jobs! c tx))
+
+;; ---------------------------------------------------------------------------
 ;; Reindex
 ;; ---------------------------------------------------------------------------
 
@@ -107,10 +114,12 @@
             retry-policy
             retention
             reindex-interval
+            ttl-interval
             event-fn
             ^ScheduledExecutorService rescue-scheduler
             ^ScheduledExecutorService retention-scheduler
             ^ScheduledExecutorService reindex-scheduler
+            ^ScheduledExecutorService ttl-scheduler
             running?])
 
 (defn- schedule-when! [^ScheduledExecutorService sched interval f]
@@ -147,6 +156,10 @@
                               PostgreSQL only; no-op on other databases.
                               Caller is responsible for leader election when using multiple nodes.
                               Example: \"24h\"
+     :ttl-interval          - how often to expire TTL-exceeded jobs; duration string or ms.
+                              nil = disabled (default).
+                              Targets :available, :scheduled, and :retryable jobs whose created_at + ttl_ms <= now.
+                              Example: \"1m\"
      :event-fn              - optional (fn [event]) called after each maintenance task.
                               Exceptions are swallowed. Event types:
                                 :s-exp.drip.maintenance/rescue    - after rescue run
@@ -154,6 +167,7 @@
                                 :s-exp.drip.maintenance/reindex   - after reindex run
                               All events carry :duration-ms. Error events carry :error (Exception).
                               Reindex success events carry :results ({index-kw => status}).
+                              TTL expiry success events carry :count (number of expired jobs).
 
    Returns a MaintenanceWorker record. Stop with stop-maintenance-worker!."
   [{:keys [client queues
@@ -161,6 +175,7 @@
            retry-policy
            retention retention-interval
            reindex-interval
+           ttl-interval
            event-fn]
     :or {queues ["default"]
          rescue-after {:default "1h"}
@@ -171,6 +186,7 @@
   (let [rescue-scheduler (when rescue-after (Executors/newSingleThreadScheduledExecutor))
         retention-scheduler (when retention (Executors/newSingleThreadScheduledExecutor))
         reindex-scheduler (when reindex-interval (Executors/newSingleThreadScheduledExecutor))
+        ttl-scheduler (when ttl-interval (Executors/newSingleThreadScheduledExecutor))
         running? (atom true)]
     (schedule-when!
      rescue-scheduler rescue-interval
@@ -217,6 +233,22 @@
                (emit! event-fn {:type :s-exp.drip.maintenance/reindex
                                 :duration-ms (- (System/currentTimeMillis) t0)
                                 :error e})))))))
+    (schedule-when!
+     ttl-scheduler ttl-interval
+     (fn []
+       (when @running?
+         (let [t0 (System/currentTimeMillis)]
+           (try
+             (let [n (db/with-tx [tx client]
+                       (run-ttl-expiry client tx))]
+               (emit! event-fn {:type :s-exp.drip.maintenance/ttl-expiry
+                                :duration-ms (- (System/currentTimeMillis) t0)
+                                :count n}))
+             (catch Exception e
+               (log/error e "drip: ttl-expiry error")
+               (emit! event-fn {:type :s-exp.drip.maintenance/ttl-expiry
+                                :duration-ms (- (System/currentTimeMillis) t0)
+                                :error e})))))))
     (map->MaintenanceWorker
      {:client client
       :queues queues
@@ -224,10 +256,12 @@
       :retry-policy retry-policy
       :retention retention
       :reindex-interval reindex-interval
+      :ttl-interval ttl-interval
       :event-fn event-fn
       :rescue-scheduler rescue-scheduler
       :retention-scheduler retention-scheduler
       :reindex-scheduler reindex-scheduler
+      :ttl-scheduler ttl-scheduler
       :running? running?})))
 
 (defn stop-maintenance-worker!
@@ -240,11 +274,12 @@
   [{:keys [^ScheduledExecutorService rescue-scheduler
            ^ScheduledExecutorService retention-scheduler
            ^ScheduledExecutorService reindex-scheduler
+           ^ScheduledExecutorService ttl-scheduler
            running?]}
    & {:keys [timeout]
       :or {timeout "5s"}}]
   (reset! running? false)
-  (doseq [^ScheduledExecutorService s [rescue-scheduler retention-scheduler reindex-scheduler]
+  (doseq [^ScheduledExecutorService s [rescue-scheduler retention-scheduler reindex-scheduler ttl-scheduler]
           :when s]
     (.shutdown s))
   (let [timeout-ms (long (duration/duration timeout))]
@@ -253,4 +288,4 @@
                 (and clean? (.awaitTermination s timeout-ms TimeUnit/MILLISECONDS))
                 clean?))
             true
-            [rescue-scheduler retention-scheduler reindex-scheduler])))
+            [rescue-scheduler retention-scheduler reindex-scheduler ttl-scheduler])))

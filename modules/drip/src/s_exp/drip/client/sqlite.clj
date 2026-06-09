@@ -45,7 +45,8 @@
      :unique-key (:unique-key row)
      :unique-states (:unique-states row)
      :ephemeral (= 1 (:ephemeral row))
-     :timeout-ms (:timeout-ms row)}))
+     :timeout (:timeout-ms row)
+     :ttl (:ttl-ms row)}))
 
 (defrecord SQLiteClient [ds]
   client/Migration
@@ -72,6 +73,7 @@
           scheduled-at (or (:scheduled-at opts) now)
           initial-state (if (.isAfter ^Instant scheduled-at now) "scheduled" "available")
           timeout-ms (when-let [t (:timeout opts)] (long (duration/duration t)))
+          ttl-ms (when-let [t (:ttl opts)] (long (duration/duration t)))
           result (try
                    (jdbc/execute-one!
                     tx
@@ -79,11 +81,11 @@
                         (attempt, attempted_by, encoded_args, errors,
                          kind, max_attempts, metadata, priority,
                          queue, scheduled_at, state, tags,
-                         unique_key, unique_states, ephemeral, timeout_ms)
+                         unique_key, unique_states, ephemeral, timeout_ms, ttl_ms)
                       VALUES (0, json_array(), ?, json_array(),
                               ?, ?, ?, ?,
                               ?, ?, ?, ?,
-                              ?, ?, ?, ?)"
+                              ?, ?, ?, ?, ?)"
                      encoded-args
                      kind
                      (int (:max-attempts opts))
@@ -96,7 +98,8 @@
                      unique-key
                      unique-states
                      (if (:ephemeral opts) 1 0)
-                     timeout-ms]
+                     timeout-ms
+                     ttl-ms]
                     {:return-keys true})
                    (catch SQLiteException e
                      (when-not (= SQLiteErrorCode/SQLITE_CONSTRAINT_UNIQUE (.getResultCode ^SQLiteException e))
@@ -407,6 +410,20 @@
                    (str/join " AND " conditions)
                    " ORDER BY id DESC LIMIT " (int limit))]
       (mapv row->job (jdbc/execute! tx (into [sql] params) db/jdbc-opts))))
+
+  (expire-ttl-jobs! [_ tx]
+    (let [now (encode-ts (Instant/now))
+          result (jdbc/execute-one!
+                  tx
+                  ["UPDATE drip_job
+                     SET state = 'discarded',
+                         finalized_at = ?,
+                         unique_key = CASE WHEN unique_states IS NOT NULL AND (unique_states & 16) = 0 THEN NULL ELSE unique_key END
+                     WHERE state IN ('available','scheduled','retryable')
+                       AND ttl_ms IS NOT NULL
+                       AND datetime(created_at, '+' || (ttl_ms / 1000) || ' seconds') <= datetime('now')"
+                   now])]
+      (:next.jdbc/update-count result 0)))
 
   client/Queues
   (upsert-queue! [_ tx queue-name metadata]

@@ -95,7 +95,12 @@
                      Default: false
      :timeout      - per-job timeout override; duration string or ms number.
                      Overrides :job-timeouts in the worker config for this specific job.
-                     nil = use worker-level :job-timeouts (default)"
+                     nil = use worker-level :job-timeouts (default)
+     :ttl          - time-to-live; duration string or ms number.
+                     Job is automatically discarded if still unstarted (in :available,
+                     :scheduled, or :retryable state) when created_at + ttl_ms <= now.
+                     Requires :ttl-interval in the maintenance worker.
+                     nil = no expiry (default)"
   [client kind args & {:as opts}]
   (let [job (with-tx [tx client]
               (client/insert-job! client tx kind args opts))]
@@ -528,6 +533,8 @@
      :retention-interval - how often to run retention cleanup; duration string or ms (default \"1m\")
      :reindex-interval   - how often to reindex; duration string or ms; nil = disabled.
                            PostgreSQL only. Caller handles leader election.
+     :ttl-interval       - how often to expire TTL-exceeded jobs; duration string or ms; nil = disabled.
+                           Required to actually discard jobs inserted with :ttl.
      :event-fn           - (fn [event]) observability hook for metrics/tracing/logging
 
    Returns a MaintenanceWorker record. Stop with stop-maintenance-worker!."

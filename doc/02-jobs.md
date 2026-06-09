@@ -22,6 +22,8 @@ Every job is returned as a Clojure map (defrecord) with these fields:
 | `:tags` | vector | Arbitrary string tags |
 | `:metadata` | map | User-controlled metadata (string keys) |
 | `:ephemeral` | boolean | If true, row is deleted immediately on successful completion |
+| `:timeout` | long or nil | Per-job execution timeout in milliseconds (nil = use worker config) |
+| `:ttl` | long or nil | Time-to-live in milliseconds; job is discarded if unstarted after `created_at + ttl_ms` (nil = no TTL) |
 
 ## Job states
 
@@ -102,6 +104,8 @@ If the transaction rolls back, the job is not created.
 | `:metadata` | map | `{}` | User-controlled metadata (string keys) |
 | `:unique-opts` | map | nil | Deduplication options (see below) |
 | `:ephemeral` | boolean | `false` | Delete row immediately on successful completion (see below) |
+| `:timeout` | duration or ms | nil | Per-job execution timeout; overrides worker `:job-timeouts` for this job (see below) |
+| `:ttl` | duration or ms | nil | Time-to-live; job is discarded if still unstarted when `created_at + ttl_ms <= now` (see below) |
 
 ### Scheduled jobs
 
@@ -285,6 +289,87 @@ Ephemeral status can also be set via `update-job!`:
 
 ```clojure
 (drip/update-job client job-id {:ephemeral true})
+```
+
+## Per-job timeout
+
+A job can override the worker's `:job-timeouts` config with a `:timeout` set at insert time. This is useful when the same kind sometimes needs a different timeout depending on the payload — for example, a report job that normally runs in 30 seconds but occasionally processes a large dataset:
+
+```clojure
+;; Worker config: 30s default for all jobs
+(drip/start-worker!
+  {:client client
+   :registry registry
+   :job-timeouts {:default "30s"}})
+
+;; This specific job gets 5 minutes regardless of the worker config
+(drip/insert-job client "generate_report" {:range "yearly" :customer-id 42}
+  :timeout "5m")
+```
+
+The per-job `:timeout` takes full precedence. A job with no `:timeout` (nil) falls back to the worker's `:job-timeouts` lookup.
+
+Values accept duration strings (`"30s"`, `"5m"`, `"2h"`) or raw milliseconds. The stored value is exposed as `:timeout` (long, milliseconds) on the job record.
+
+```clojure
+;; Retrieve stored timeout
+(:timeout (drip/get-job client job-id))   ; => 300000 (ms) or nil
+```
+
+When exceeded, the job thread is interrupted and the job transitions to `:retryable` or `:discarded` (same as a handler exception), with a `"job timed out"` error recorded.
+
+## Job TTL
+
+A TTL (time-to-live) marks a job as stale after a fixed duration. If the job hasn't started (is still in `:available`, `:scheduled`, or `:retryable` state) when `created_at + ttl_ms <= now`, the maintenance worker discards it automatically.
+
+```clojure
+;; This job is meaningless more than 10 minutes after it was enqueued
+(drip/insert-job client "send_push_notification" {:user-id 42 :msg "..."}
+  :ttl "10m")
+```
+
+The TTL is stored as a duration in milliseconds. The expiry deadline is computed at query time as `created_at + ttl_ms`. It does not advance with retries — if a job is retried three times and still hasn't run, it will be expired based on the original insert time.
+
+### Enabling TTL expiry in the maintenance worker
+
+TTL jobs are only discarded when the maintenance worker runs its expiry sweep. Enable it with `:ttl-interval`:
+
+```clojure
+(drip/start-maintenance-worker!
+  {:client       client
+   :ttl-interval "1m"    ; check for expired jobs every minute
+   ;; ...other options
+   })
+```
+
+Without `:ttl-interval`, the `ttl_ms` column is stored but never acted on.
+
+### TTL vs scheduling
+
+| | `:scheduled-at` | `:ttl` |
+|---|---|---|
+| Purpose | Delay when a job *starts* | Expire a job if not started in time |
+| Effect | Job waits in `:scheduled` state | Job discarded after deadline passes |
+| Acts on | Future time | Duration from insert |
+
+A job can have both: `scheduled_at` to delay its first eligibility, and a TTL to abandon it if it still hasn't run by a deadline.
+
+### Behavior by state
+
+| State at expiry time | Action |
+|---|---|
+| `:available` | Discarded |
+| `:scheduled` | Discarded |
+| `:retryable` | Discarded |
+| `:running` | **Not affected** — running jobs are never expired |
+| Already finalized | No-op |
+
+### Inspecting TTL
+
+The TTL is exposed as `:ttl` (long milliseconds or nil) on the job record:
+
+```clojure
+(:ttl (drip/get-job client job-id))   ; => 600000 (ms) or nil
 ```
 
 ## Querying jobs

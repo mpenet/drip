@@ -104,7 +104,8 @@
      :unique-key (:unique-key row)
      :unique-states (:unique-states row)
      :ephemeral (boolean (:ephemeral row))
-     :timeout-ms (:timeout-ms row)}))
+     :timeout (:timeout-ms row)
+     :ttl (:ttl-ms row)}))
 
 ;; ---------------------------------------------------------------------------
 ;; Helpers
@@ -201,6 +202,7 @@
           initial-state (if (.isAfter ^Instant scheduled-at now) "scheduled" "available")
           tags-arr ^"[Ljava.lang.String;" (into-array String (map str (:tags opts)))
           timeout-ms (when-let [t (:timeout opts)] (long (duration/duration t)))
+          ttl-ms (when-let [t (:ttl opts)] (long (duration/duration t)))
           result (try
                    (jdbc/execute-one!
                     tx
@@ -208,11 +210,11 @@
                         (state, attempt, max_attempts, scheduled_at, priority,
                          args, attempted_by, errors,
                          kind, metadata, queue, tags,
-                         unique_key, unique_states, ephemeral, timeout_ms)
+                         unique_key, unique_states, ephemeral, timeout_ms, ttl_ms)
                       VALUES (?::drip_job_state, 0, ?, ?, ?,
                               ?::jsonb, '{}', '{}',
                               ?, ?::jsonb, ?, ?,
-                              ?, ?::bit(8), ?, ?)
+                              ?, ?::bit(8), ?, ?, ?)
                       RETURNING *"
                      initial-state
                      (int (:max-attempts opts))
@@ -226,7 +228,8 @@
                      unique-key
                      unique-states-str
                      (boolean (:ephemeral opts))
-                     timeout-ms]
+                     timeout-ms
+                     ttl-ms]
                     db/jdbc-opts)
                    (catch java.sql.SQLException e
                      (when-not (db/unique-conflict-sql-states (.getSQLState e))
@@ -526,6 +529,21 @@
                    (str/join " AND " conditions)
                    " ORDER BY id DESC LIMIT " (int limit))]
       (mapv row->job (jdbc/execute! tx (into [sql] params) db/jdbc-opts))))
+
+  (expire-ttl-jobs! [_ tx]
+    (let [now (encode-ts (Instant/now))
+          result (jdbc/execute-one!
+                  tx
+                  ["UPDATE drip_job
+                     SET state = 'discarded'::drip_job_state,
+                         finalized_at = ?
+                     WHERE state IN ('available'::drip_job_state,
+                                     'scheduled'::drip_job_state,
+                                     'retryable'::drip_job_state)
+                       AND ttl_ms IS NOT NULL
+                       AND created_at + (ttl_ms * interval '1 millisecond') <= now()"
+                   now])]
+      (:next.jdbc/update-count result 0)))
 
   client/Queues
   (upsert-queue! [_ tx queue-name metadata]

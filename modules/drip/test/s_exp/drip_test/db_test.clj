@@ -994,26 +994,48 @@
       (is (= :scheduled (:state snoozed))))))
 
 ;; ---------------------------------------------------------------------------
+;; Per-job TTL
+;; ---------------------------------------------------------------------------
+
+(deftest insert-job-ttl-test
+  (testing "duration string stored as :ttl in milliseconds"
+    (let [j (drip/insert-job *client* "ttl_str" {} {:ttl "10m"})]
+      (is (= 600000 (:ttl j)))))
+
+  (testing "millisecond number stored as :ttl"
+    (let [j (drip/insert-job *client* "ttl_ms" {} {:ttl 5000})]
+      (is (= 5000 (:ttl j)))))
+
+  (testing "no :ttl → nil :ttl"
+    (let [j (drip/insert-job *client* "ttl_nil" {} nil)]
+      (is (nil? (:ttl j)))))
+
+  (testing ":ttl round-trips through get-job"
+    (let [j (drip/insert-job *client* "ttl_fetch" {} {:ttl "30m"})
+          fetched (drip/get-job *client* (:id j))]
+      (is (= 1800000 (:ttl fetched))))))
+
+;; ---------------------------------------------------------------------------
 ;; Per-job timeout
 ;; ---------------------------------------------------------------------------
 
 (deftest insert-job-timeout-test
-  (testing "duration string stored as :timeout-ms in milliseconds"
+  (testing "duration string stored as :timeout in milliseconds"
     (let [j (drip/insert-job *client* "timeout_str" {:x 1} {:timeout "30s"})]
-      (is (= 30000 (:timeout-ms j)))))
+      (is (= 30000 (:timeout j)))))
 
-  (testing "millisecond number stored as :timeout-ms"
+  (testing "millisecond number stored as :timeout"
     (let [j (drip/insert-job *client* "timeout_ms" {:x 1} {:timeout 5000})]
-      (is (= 5000 (:timeout-ms j)))))
+      (is (= 5000 (:timeout j)))))
 
-  (testing "no :timeout → nil :timeout-ms"
+  (testing "no :timeout → nil :timeout"
     (let [j (drip/insert-job *client* "timeout_nil" {} nil)]
-      (is (nil? (:timeout-ms j)))))
+      (is (nil? (:timeout j)))))
 
-  (testing ":timeout-ms round-trips through get-job"
+  (testing ":timeout round-trips through get-job"
     (let [j (drip/insert-job *client* "timeout_fetch" {} {:timeout "1m"})
           fetched (drip/get-job *client* (:id j))]
-      (is (= 60000 (:timeout-ms fetched))))))
+      (is (= 60000 (:timeout fetched))))))
 
 ;; ---------------------------------------------------------------------------
 ;; insert-many-fast! (PostgreSQL only)
