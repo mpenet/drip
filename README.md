@@ -377,7 +377,7 @@ Rescue, retention cleanup, and index maintenance run in a separate worker. Each 
 
 ### Retry policies
 
-Drip ships several built-in policy constructors. All take attempt (1-based long) and return a `java.time.Instant`.
+Drip ships several built-in policy constructors. A retry policy is a plain function `(fn [attempt] long)` that returns the delay in milliseconds until the next attempt.
 
 ```clojure
 ;; Default: exponential backoff, base 1s, multiplier 2, max 1h, ±10% jitter
@@ -402,9 +402,9 @@ drip/default-retry-policy
 ;; Retry immediately — useful for tests or idempotent fast-fail jobs
 (drip/immediate-retry-policy)
 
-;; Custom: takes attempt (1-based long), returns java.time.Instant
+;; Custom: takes attempt (1-based long), returns milliseconds
 (defn my-policy [attempt]
-  (.plusSeconds (Instant/now) (* 30 attempt)))
+  (* 30000 attempt))  ; 30s * attempt
 ```
 
 Use `:retry-policies` with a `:default` key and per-kind overrides:
