@@ -156,7 +156,7 @@ drip always shuts down the supplied executor on `stop-worker!` / `stop-and-cance
 
 ## Retry policies
 
-A retry policy is a plain function `(fn [attempt] java.time.Instant)`. The `attempt` argument is 1-based (it reflects the attempt that just failed).
+A retry policy is a plain function `(fn [attempt] long)` that returns the delay in milliseconds until the next attempt. The `attempt` argument is 1-based (it reflects the attempt that just failed).
 
 ### Default policy
 
@@ -200,11 +200,11 @@ Drip ships several policy constructors. All duration arguments accept strings (`
 
 ### Custom policies
 
-Any function `(fn [attempt] java.time.Instant)` works as a policy:
+Any function `(fn [attempt] long)` returning milliseconds works as a policy:
 
 ```clojure
 (defn my-policy [attempt]
-  (.plusSeconds (Instant/now) (* 30 attempt)))
+  (* 30000 attempt))  ; 30s * attempt
 ```
 
 ### Per-kind policies

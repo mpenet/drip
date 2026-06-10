@@ -183,7 +183,7 @@
           exhausted? (>= (:attempt job) (:max-attempts job))
           new-state (if exhausted? "discarded" "retryable")
           new-state-bit (if exhausted? 16 4)
-          next-run (when-not exhausted? (retry-policy (:attempt job)))]
+          next-run (when-not exhausted? (.plusMillis ^Instant now (long (retry-policy (:attempt job)))))]
       (jdbc/execute-one!
        tx
        ["UPDATE drip_job
@@ -316,7 +316,7 @@
          (let [exhausted? (>= (:attempt row) (:max-attempts row))
                new-state (if exhausted? "discarded" "retryable")
                new-state-bit (if exhausted? 16 4)
-               next-run (when-not exhausted? (retry-policy (:attempt row)))
+               next-run (when-not exhausted? (.plusMillis ^Instant now (long (retry-policy (:attempt row)))))
                job (row->job (jdbc/execute-one! tx
                                                 ["SELECT * FROM drip_job WHERE id = ?" (:id row)]
                                                 db/jdbc-opts))

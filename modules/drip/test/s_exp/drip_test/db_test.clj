@@ -644,11 +644,11 @@
 
 (deftest custom-retry-policy-test
   (testing "custom retry policy controls next scheduled_at"
-    (let [fixed-delay 60
-          custom-policy (fn [_attempt] (.plusSeconds (Instant/now) fixed-delay))
+    (let [fixed-delay-ms (* 60 1000)
+          custom-policy (fn [_attempt] fixed-delay-ms)
           j (drip/insert-job *client* "k" {} {:max-attempts 3})
           _ (drip/fetch-jobs *client* "default" "w" :limit 1)
-          before (.plusSeconds (Instant/now) (- fixed-delay 5))
+          before (.plusSeconds (Instant/now) 55)
           failed (drip/with-tx [tx *client*]
                    (drip-client/fail-job! *client* tx (:id j)
                                           {:error "x"} custom-policy))]

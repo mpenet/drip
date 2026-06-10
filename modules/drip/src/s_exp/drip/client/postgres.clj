@@ -299,7 +299,7 @@
           error-entry (assoc error-map :at (str now))
           exhausted? (>= (:attempt row) (:max-attempts row))
           new-state (if exhausted? "discarded" "retryable")
-          next-run (when-not exhausted? (retry-policy (:attempt row)))
+          next-run (when-not exhausted? (.plusMillis ^Instant now (long (retry-policy (:attempt row)))))
           result (jdbc/execute-one!
                   tx
                   ["UPDATE drip_job
@@ -441,7 +441,7 @@
        (fn [^long n row]
          (let [exhausted? (>= (:attempt row) (:max-attempts row))
                new-state (if exhausted? "discarded" "retryable")
-               next-run (when-not exhausted? (retry-policy (:attempt row)))]
+               next-run (when-not exhausted? (.plusMillis ^Instant now (long (retry-policy (:attempt row)))))]
            (jdbc/execute-one!
             tx
             ["UPDATE drip_job

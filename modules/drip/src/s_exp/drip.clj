@@ -475,7 +475,7 @@
 ;; ---------------------------------------------------------------------------
 
 (def default-retry-policy
-  "Default retry policy fn. Takes attempt (1-based long), returns java.time.Instant.
+  "Default retry policy fn. Takes attempt (1-based long), returns delay in milliseconds.
    Exponential backoff: base 1s, multiplier 2, max 1h, ±10% jitter.
    Delays: ~1s, ~2s, ~4s, ~8s, ~16s, ~32s, ... capped at ~1h."
   job/default-retry-policy)
