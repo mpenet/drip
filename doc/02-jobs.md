@@ -207,10 +207,10 @@ By default the job kind is included in the unique key, so `"job_a"` and `"job_b"
 (drip/insert-job client "send_email_v1" {:user-id 42}
   :unique-opts {:by-args true :exclude-kind true})
 
-;; Conflicts — same args, kind excluded from key
+;; Duplicate — same args, kind excluded from key
 (drip/insert-job client "send_email_v2" {:user-id 42}
   :unique-opts {:by-args true :exclude-kind true})
-;; => throws SQLException
+;; => the "send_email_v1" job, with :unique-skipped true
 ```
 
 ### Default states and slot lifecycle
@@ -223,9 +223,9 @@ The uniqueness slot is active only while the job is in one of the `:by-state` st
 ;; Insert unique job
 (drip/insert-job client "sync" {} {:unique-opts {:by-args true}})
 
-;; Conflicts while the original is alive in a covered state
+;; Skipped while the original is alive in a covered state
 (drip/insert-job client "sync" {} {:unique-opts {:by-args true}})
-;; => throws SQLException
+;; => the original job, with :unique-skipped true
 
 ;; Cancel the original — slot freed
 (drip/cancel-job client job-id)
@@ -240,26 +240,21 @@ To keep the slot occupied through cancellation or discard, include those states:
 {:by-state (conj job/default-unique-states :cancelled :discarded)}
 ```
 
-### Handling the conflict
+`:by-state` must include every active state (`:available :pending :running :scheduled :retryable`, see `job/required-unique-states`); only finalized states are optional. Otherwise an insert throws `IllegalArgumentException`. Active states move into each other automatically (fetch, fail, snooze, promotion). If one were left uncovered, a duplicate could be inserted while the job sits in it, and the two would collide on the next automatic transition.
 
-When a duplicate insert is blocked, drip throws a `clojure.lang.ExceptionInfo` with `:type :s-exp.drip/unique-conflict` in `ex-data`. The originating `java.sql.SQLException` is available via `ex-cause`:
+Moving a finalized job back into a covered state while a duplicate holds the slot (`retry-job!`, or `update-job!` with `:state`) throws `clojure.lang.ExceptionInfo` with `:type :s-exp.drip/unique-conflict` and `:job-id` in `ex-data`. On PostgreSQL the failed statement aborts the surrounding transaction.
+
+### Handling duplicates
+
+A duplicate insert inserts nothing and returns the job holding the slot, marked `:unique-skipped true`. New jobs are marked `:unique-skipped false`. No exception is thrown, so the surrounding transaction stays usable. This matters on PostgreSQL, where a failed statement would abort it:
 
 ```clojure
-(try
-  (drip/insert-job client "daily_summary" {} :unique-opts {:by-period "24h"})
-  (catch clojure.lang.ExceptionInfo e
-    (when (= :s-exp.drip/unique-conflict (:type (ex-data e)))
-      (log/info "job already queued" (select-keys (ex-data e) [:kind :queue])))))
+(drip/with-tx [tx client]
+  (let [job (drip/insert-job! client tx "daily_summary" {} :unique-opts {:by-period "24h"})]
+    (when (:unique-skipped job)
+      (log/info "job already queued" (:id job)))
+    (my-business-write! tx data)))
 ```
-
-The `ex-data` map contains:
-
-| Key | Description |
-|---|---|
-| `:type` | `:s-exp.drip/unique-conflict` |
-| `:kind` | Job kind string |
-| `:queue` | Queue name |
-| `:unique-opts` | The `unique-opts` map passed to the insert |
 
 Periodic jobs use unique constraints automatically — no manual handling needed.
 
@@ -282,7 +277,7 @@ The job's handler calls `complete-job!` as usual — the DELETE happens automati
    :registry {"process_event"
               (fn [client job]
                 (process! (:args job))
-                (drip/complete-job client (:id job)))}})
+                (drip/complete-job client job))}})
 ```
 
 Ephemeral status can also be set via `update-job!`:
@@ -464,10 +459,10 @@ Setting `:state` directly is allowed for `:available`, `:scheduled`, `:cancelled
 (drip/discard-job client job-id)
 
 ;; Mark :completed
-(drip/complete-job client job-id)
+(drip/complete-job client job)
 
 ;; Reschedule without consuming a retry (must be :running)
-(drip/snooze-job client job-id "30m")   ; or ms: (drip/snooze-job client job-id 1800000)
+(drip/snooze-job client job "30m")   ; or ms: (drip/snooze-job client job 1800000)
 ```
 
 All have `!` tx-taking variants: `retry-job!`, `cancel-job!`, `discard-job!`, `complete-job!`, `snooze-job!`.

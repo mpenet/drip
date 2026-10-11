@@ -75,7 +75,8 @@
 ;; ---------------------------------------------------------------------------
 
 (defn insert-job
-  "Inserts a job using the client's own datasource. Returns the created Job record.
+  "Inserts a job using the client's own datasource. Returns the created Job record
+   with :unique-skipped false, or the existing duplicate with :unique-skipped true.
    `kind` - string job type identifier
    `args` - map of job arguments (JSON-serializable)
    `opts` - insert opts as keyword args or a map, e.g.:
@@ -89,7 +90,12 @@
      :scheduled-at - java.time.Instant to delay execution until
      :tags         - vector of string tags
      :metadata     - map of extra metadata
-     :unique-opts  - map for unique job constraints
+     :unique-opts  - map for unique job constraints. Inserting a duplicate of a
+                     job that holds the unique slot inserts nothing and returns
+                     that existing job with :unique-skipped true (the
+                     surrounding transaction stays usable). :by-state may omit
+                     finalized states but must include every active state
+                     (s-exp.drip.job/required-unique-states).
      :ephemeral    - if true, job is deleted immediately on successful completion
                      instead of transitioning to :completed. Failures behave normally.
                      Default: false
@@ -104,7 +110,8 @@
   [client kind args & {:as opts}]
   (let [job (with-tx [tx client]
               (client/insert-job! client tx kind args opts))]
-    (when job (client/notify-job-available! client (:queue job)))
+    (when-not (:unique-skipped job)
+      (client/notify-job-available! client (:queue job)))
     job))
 
 (defn insert-job!
@@ -127,7 +134,7 @@
   (let [jobs (with-tx [tx client]
                (mapv (fn [[kind args opts]] (client/insert-job! client tx kind args opts))
                      job-specs))]
-    (doseq [queue (distinct (keep :queue jobs))]
+    (doseq [queue (distinct (map :queue (remove :unique-skipped jobs)))]
       (client/notify-job-available! client queue))
     jobs))
 
@@ -174,8 +181,8 @@
 (defn get-job
   "Returns a Job record by ID using the client's own datasource, or nil if not found."
   [client job-id]
-  (with-tx [tx client]
-    (client/get-job! client tx job-id)))
+  (db/with-conn [conn client]
+    (client/get-job! client conn job-id)))
 
 (defn get-job!
   "Returns a Job record by ID using the supplied tx, or nil if not found."
@@ -199,8 +206,8 @@
      :limit            - max rows (default 100)
      :after            - job ID cursor for pagination; returns jobs with id < after"
   [client opts]
-  (with-tx [tx client]
-    (client/list-jobs! client tx opts)))
+  (db/with-conn [conn client]
+    (client/list-jobs! client conn opts)))
 
 (defn list-jobs!
   "Lists jobs with optional filters. Uses the supplied tx.
@@ -263,15 +270,23 @@
   (client/record-output! client tx job-id output))
 
 (defn complete-job
-  "Marks a job as :completed. Uses the client's own datasource. Returns updated Job record."
-  [client job-id]
+  "Marks a :running job as :completed. Uses the client's own datasource.
+   `job` is the Job record the handler received. If the job is no longer
+   running under that claim (it timed out, was rescued or re-claimed), throws
+   ExceptionInfo with :type :s-exp.drip/claim-lost and changes nothing.
+   Returns the updated Job record."
+  [client job]
   (with-tx [tx client]
-    (client/complete-job! client tx job-id)))
+    (client/complete-job! client tx job)))
 
 (defn complete-job!
-  "Marks a job as :completed. Uses the supplied tx. Returns updated Job record."
-  [client tx job-id]
-  (client/complete-job! client tx job-id))
+  "Marks a :running job as :completed. Uses the supplied tx.
+   `job` is the Job record the handler received. If the job is no longer
+   running under that claim, throws ExceptionInfo with
+   :type :s-exp.drip/claim-lost, so tx rolls back together with any writes
+   made alongside the completion. Returns the updated Job record."
+  [client tx job]
+  (client/complete-job! client tx job))
 
 (defn cancel-job
   "Cancels a job that is not already finalized. Uses the client's own datasource."
@@ -322,18 +337,22 @@
 
 (defn snooze-job
   "Reschedules a :running job to run again after duration without consuming a retry attempt.
+   `job` is the Job record the handler received; throws ExceptionInfo with
+   :type :s-exp.drip/claim-lost if the job is no longer running under that claim.
    duration - ms number or duration string (e.g. \"1h\", \"30m\", \"90s\").
    Uses the client's own datasource. Returns updated Job record."
-  [client job-id duration]
+  [client job duration]
   (with-tx [tx client]
-    (client/snooze-job! client tx job-id duration)))
+    (client/snooze-job! client tx job duration)))
 
 (defn snooze-job!
   "Reschedules a :running job to run again after duration without consuming a retry attempt.
+   `job` is the Job record the handler received; throws ExceptionInfo with
+   :type :s-exp.drip/claim-lost if the job is no longer running under that claim.
    duration - ms number or duration string (e.g. \"1h\", \"30m\", \"90s\").
    Uses the supplied tx. Returns updated Job record."
-  [client tx job-id duration]
-  (client/snooze-job! client tx job-id duration))
+  [client tx job duration]
+  (client/snooze-job! client tx job duration))
 
 (defn rescue-stuck-jobs
   "Rescues jobs stuck in :running state with attempted_at <= stuck-after.
@@ -415,8 +434,8 @@
 (defn list-queues
   "Returns all queues. Uses the client's own datasource."
   [client]
-  (with-tx [tx client]
-    (client/list-queues! client tx)))
+  (db/with-conn [conn client]
+    (client/list-queues! client conn)))
 
 (defn list-queues!
   "Returns all queues. Uses the supplied tx."

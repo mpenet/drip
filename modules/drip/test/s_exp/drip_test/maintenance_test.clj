@@ -11,6 +11,11 @@
 
 (use-fixtures :each with-db)
 
+(defn- current
+  "Re-reads job, so it carries its latest claim (for complete/fail/snooze)."
+  [job]
+  (drip/get-job *client* (:id job)))
+
 ;; ---------------------------------------------------------------------------
 ;; Helpers
 ;; ---------------------------------------------------------------------------
@@ -49,7 +54,7 @@
     (let [j (drip/insert-job *client* "ret_done" {} {:queue "ret-q"})
           _ (drip/fetch-jobs *client* "ret-q" "w" :limit 1)
           _ (drip/with-tx [tx *client*]
-              (drip-client/complete-job! *client* tx (:id j)))
+              (drip-client/complete-job! *client* tx (current j)))
           _ (backdate-finalized! (:id j) (* 25 3600))]
       (drip/with-tx [tx *client*]
         (#'maintenance/run-cleaner *client* tx {:default {:completed "24h"}} ["ret-q"]))
@@ -60,7 +65,7 @@
     (let [j (drip/insert-job *client* "ret_recent" {} {:queue "ret-recent-q"})
           _ (drip/fetch-jobs *client* "ret-recent-q" "w" :limit 1)
           _ (drip/with-tx [tx *client*]
-              (drip-client/complete-job! *client* tx (:id j)))]
+              (drip-client/complete-job! *client* tx (current j)))]
       (drip/with-tx [tx *client*]
         (#'maintenance/run-cleaner *client* tx {:default {:completed "24h"}} ["ret-recent-q"]))
       (is (some? (drip/get-job *client* (:id j)))))))
@@ -70,7 +75,7 @@
     (let [j (drip/insert-job *client* "ret_nil" {} {:queue "ret-nil-q"})
           _ (drip/fetch-jobs *client* "ret-nil-q" "w" :limit 1)
           _ (drip/with-tx [tx *client*]
-              (drip-client/complete-job! *client* tx (:id j)))
+              (drip-client/complete-job! *client* tx (current j)))
           _ (backdate-finalized! (:id j) (* 25 3600))]
       (drip/with-tx [tx *client*]
         (#'maintenance/run-cleaner *client* tx {:default {:completed nil}} ["ret-nil-q"]))
@@ -82,7 +87,7 @@
           j-cancel (drip/insert-job *client* "ret_multi" {} {:queue "ret-multi-q"})
           _ (drip/fetch-jobs *client* "ret-multi-q" "w" :limit 10)
           _ (drip/with-tx [tx *client*]
-              (drip-client/complete-job! *client* tx (:id j-done)))
+              (drip-client/complete-job! *client* tx (current j-done)))
           _ (drip/cancel-job *client* (:id j-cancel))
           _ (backdate-finalized! (:id j-done) (* 25 3600))
           _ (backdate-finalized! (:id j-cancel) (* 25 3600))]
@@ -100,8 +105,8 @@
           _ (drip/fetch-jobs *client* "ret-long-q" "w" :limit 1)
           _ (drip/fetch-jobs *client* "ret-short-q" "w" :limit 1)
           _ (drip/with-tx [tx *client*]
-              (drip-client/complete-job! *client* tx (:id j-long))
-              (drip-client/complete-job! *client* tx (:id j-short)))
+              (drip-client/complete-job! *client* tx (current j-long))
+              (drip-client/complete-job! *client* tx (current j-short)))
           _ (backdate-finalized! (:id j-long) (* 25 3600))
           _ (backdate-finalized! (:id j-short) (* 25 3600))]
       ;; ret-long-q overrides completed retention to 48h — job is only 25h old, survives
@@ -228,7 +233,7 @@
     (let [j (drip/insert-job *client* "mw_ret" {} {:queue "mw-ret-q"})
           _ (drip/fetch-jobs *client* "mw-ret-q" "w" :limit 1)
           _ (drip/with-tx [tx *client*]
-              (drip-client/complete-job! *client* tx (:id j)))
+              (drip-client/complete-job! *client* tx (current j)))
           _ (backdate-finalized! (:id j) (* 25 3600))
           mw (drip/start-maintenance-worker!
               {:client *client*
@@ -276,7 +281,7 @@
     (let [j (drip/insert-job *client* "ttl_retry" {} {:ttl "1h" :max-attempts 3})
           _ (drip/fetch-jobs *client* "default" "w" :limit 1)
           _ (drip/with-tx [tx *client*]
-              (drip-client/fail-job! *client* tx (:id j) {:error "x"} job/default-retry-policy))
+              (drip-client/fail-job! *client* tx (current j) {:error "x"} job/default-retry-policy))
           _ (expire-ttl! (:id j))]
       (drip/with-tx [tx *client*]
         (#'maintenance/run-ttl-expiry *client* tx))

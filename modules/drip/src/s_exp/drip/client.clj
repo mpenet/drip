@@ -25,26 +25,35 @@
 
 (defprotocol Jobs
   (insert-job! [client tx kind args opts]
-    "Inserts a job using tx. Returns a Job record.")
+    "Inserts a job using tx. Returns the new Job record with :unique-skipped false,
+     or, when a job holding the same unique slot exists, that job with
+     :unique-skipped true.")
   (fetch-jobs! [client tx queue worker-id opts]
     "Atomically claims up to limit available jobs using the supplied tx.
      opts: :limit (default 10). Returns vector of Job records.")
   (record-output! [client tx job-id output]
     "Merges {:output output} into the job's metadata column. Returns updated Job record.
      Output is accessible as (get-in job [:metadata \"output\"]) after completion.")
-  (complete-job! [client tx job-id]
-    "Marks job as :completed. Returns updated Job record.")
-  (fail-job! [client tx job-id error-map retry-policy]
-    "Records error, transitions to :retryable or :discarded. Returns updated Job record.")
+  (complete-job! [client tx job]
+    "Marks job, a Job record from fetch-jobs!, as :completed. Throws ExceptionInfo
+     with :type :s-exp.drip/claim-lost unless the job is still running under the
+     claim it was fetched with (see s-exp.drip.job/claim). Returns updated Job record.")
+  (fail-job! [client tx job error-map retry-policy]
+    "Records error on job, a Job record from fetch-jobs!, and transitions it to
+     :retryable or :discarded. Throws ExceptionInfo with
+     :type :s-exp.drip/claim-lost unless the job is still running under the
+     claim it was fetched with. Returns updated Job record.")
   (cancel-job! [client tx job-id]
     "Cancels a non-finalized job. Returns updated Job record.")
   (retry-job! [client tx job-id]
     "Forces job back to :available. Returns updated Job record.")
   (discard-job! [client tx job-id]
     "Moves job to :discarded. Returns updated Job record.")
-  (snooze-job! [client tx job-id duration]
-    "Reschedules a :running job to run again after duration (ms number or duration string e.g. \"1h\")
-     without consuming a retry attempt. Returns updated Job record.")
+  (snooze-job! [client tx job duration]
+    "Reschedules job, a Job record from fetch-jobs!, to run again after duration
+     (ms number or duration string e.g. \"1h\") without consuming a retry attempt.
+     Throws ExceptionInfo with :type :s-exp.drip/claim-lost unless the job is
+     still running under the claim it was fetched with. Returns updated Job record.")
   (promote-scheduled-jobs! [client tx]
     "Moves :scheduled/:retryable jobs whose scheduled_at <= now to :available.
      Returns count of promoted jobs.")

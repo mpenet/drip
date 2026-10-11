@@ -24,7 +24,7 @@
 (defn start-periodic-jobs!
   "Schedules periodic job insertions for a sequence of spec maps.
    Each spec fires at the start of every period interval.
-   Duplicate insertions within a period are silently discarded (unique key conflict).
+   Duplicate insertions within a period are skipped (unique per period).
 
    Spec keys:
      :kind   - job kind string
@@ -45,9 +45,7 @@
                      (db/with-tx [tx c]
                        (client/insert-job! c tx kind args (periodic-insert-opts spec)))
                      (catch Exception t
-                       ;; A unique conflict means this period's job already exists
-                       (when-not (= :s-exp.drip/unique-conflict (:type (ex-data t)))
-                         (log/error t "drip: periodic insert error" {:kind kind})))))
+                       (log/error t "drip: periodic insert error" {:kind kind}))))
        0
        (period-ms period)
        TimeUnit/MILLISECONDS))

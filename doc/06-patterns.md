@@ -27,7 +27,7 @@ Complete a job atomically with your own writes. Call `complete-job!` inside your
      (let [result (charge-card! tx (:args job))]
        (record-transaction! tx result)
        (drip/record-output! client tx (:id job) {:transaction-id (:id result)})
-       (drip/complete-job!  client tx (:id job)))))}
+       (drip/complete-job!  client tx job))))}
 ```
 
 If `charge-card!` throws, the transaction rolls back, the job is not completed, and the handler's exception propagates to the worker — which records the error and retries the job. The payment record and the job completion are atomically committed together.
@@ -45,7 +45,7 @@ A single job inserts a batch of child jobs within the same transaction:
      (drip/with-tx [tx client]
        (drip/insert-many! client tx
          (mapv (fn [id] ["process_item" {:id id} nil]) ids))
-       (drip/complete-job! client tx (:id job)))))}
+       (drip/complete-job! client tx job))))}
 ```
 
 The parent job and all child jobs are committed atomically. If the transaction rolls back, none of the child jobs exist.
@@ -60,12 +60,12 @@ A job can reschedule itself without consuming a retry attempt. Useful for pollin
    (let [status (check-status (:args job))]
      (case status
        :pending
-       (drip/snooze-job client (:id job) "5m")  ; check again in 5 minutes
+       (drip/snooze-job client job "5m")  ; check again in 5 minutes
 
        :complete
        (do
          (record-result! (:args job))
-         (drip/complete-job client (:id job)))
+         (drip/complete-job client job))
 
        :failed
        (throw (ex-info "External API failed" {:status status})))))}
@@ -86,19 +86,19 @@ One job enqueues the next step on completion:
    (let [data (extract! (:args job))]
      (drip/with-tx [tx client]
        (drip/insert-job! client tx "step2_transform" {:data data})
-       (drip/complete-job! client tx (:id job)))))}
+       (drip/complete-job! client tx job))))}
 
 {"step2_transform"
  (fn [client job]
    (let [result (transform! (:args job))]
      (drip/with-tx [tx client]
        (drip/insert-job! client tx "step3_load" {:result result})
-       (drip/complete-job! client tx (:id job)))))}
+       (drip/complete-job! client tx job))))}
 
 {"step3_load"
  (fn [client job]
    (load! (:args job))
-   (drip/complete-job client (:id job)))}
+   (drip/complete-job client job))}
 ```
 
 Each step is guaranteed to enqueue the next only if it completes successfully.
@@ -115,7 +115,7 @@ Handlers can run more than once (due to retries or rescued stuck jobs). Design t
      (when-not (email-already-sent? user-id email-type)
        (send-email! user-id email-type)
        (record-email-sent! user-id email-type))
-     (drip/complete-job client (:id job))))}
+     (drip/complete-job client job)))}
 ```
 
 Or use a database unique constraint on your business side — the second attempt will fail with a constraint violation which you can catch and treat as success:
@@ -129,7 +129,7 @@ Or use a database unique constraint on your business side — the second attempt
        ;; Duplicate key = already provisioned = success
        (when-not (= "23505" (.getSQLState e))
          (throw e))))
-   (drip/complete-job client (:id job)))}
+   (drip/complete-job client job))}
 ```
 
 ## Closing over dependencies
@@ -143,14 +143,14 @@ Inject external dependencies via closures:
   {"send_email"
    (fn [client job]
      (email/send! email-client (:args job))
-     (drip/complete-job client (:id job)))
+     (drip/complete-job client job))
 
    "charge_card"
    (fn [client job]
      (drip/with-tx [tx client]
        (let [charge (stripe/charge! stripe-client (:args job))]
          (db/record-charge! tx charge)
-         (drip/complete-job! client tx (:id job)))))})
+         (drip/complete-job! client tx job))))})
 
 ;; Wire up
 (def registry (make-registry my-email-client my-stripe-client))
@@ -170,7 +170,7 @@ Define handlers as records implementing `clojure.lang.IFn` via `invoke`. Depende
   clojure.lang.IFn
   (invoke [_ client job]
     (email/send! email-client (:args job))
-    (drip/complete-job client (:id job))))
+    (drip/complete-job client job)))
 
 (defrecord ChargeCardHandler [stripe-client]
   clojure.lang.IFn
@@ -178,7 +178,7 @@ Define handlers as records implementing `clojure.lang.IFn` via `invoke`. Depende
     (drip/with-tx [tx client]
       (let [charge (stripe/charge! stripe-client (:args job))]
         (db/record-charge! tx charge)
-        (drip/complete-job! client tx (:id job))))))
+        (drip/complete-job! client tx job)))))
 ```
 
 The registry just maps kind strings to handler instances — they satisfy IFn so the worker calls them like functions:
@@ -341,7 +341,7 @@ For simpler handlers without side effects that matter:
   (let [results (atom [])
         handler (fn [client job]
                   (swap! results conj (get-in job [:args :n]))
-                  (drip/complete-job client (:id job)))]
+                  (drip/complete-job client job))]
     ;; exercise business logic only — no real DB needed
     (with-redefs [drip/complete-job (fn [_ _] nil)]
       (handler nil {:id 1 :args {:n 42}}))

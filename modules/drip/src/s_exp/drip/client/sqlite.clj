@@ -7,13 +7,15 @@
      - INTEGER PRIMARY KEY AUTOINCREMENT; generated key is :last_insert_rowid()
      - No NOTIFY/LISTEN"
   (:require [clojure.string :as str]
+            [clojure.tools.logging :as log]
             [next.jdbc :as jdbc]
             [s-exp.drip.client :as client]
             [s-exp.drip.db :as db]
             [s-exp.drip.job :as job]
             [s-exp.duration :as duration])
   (:import (java.time Instant)
-           (org.sqlite SQLiteErrorCode SQLiteException)))
+           (org.sqlite SQLiteConfig$TransactionMode SQLiteConnection SQLiteErrorCode
+                       SQLiteException)))
 
 (set! *warn-on-reflection* true)
 
@@ -23,6 +25,10 @@
 
 (defn- encode-ts ^String [^Instant i]
   (db/instant->str i))
+
+(defn- unique-violation? [e]
+  (and (instance? SQLiteException e)
+       (= SQLiteErrorCode/SQLITE_CONSTRAINT_UNIQUE (.getResultCode ^SQLiteException e))))
 
 (defn- row->job [row]
   (when row
@@ -68,16 +74,17 @@
           unique-opts (:unique-opts opts)
           unique-key (db/compute-unique-key kind args queue now unique-opts)
           unique-states (when unique-opts
-                          (job/states->bitmask
-                           (or (:by-state unique-opts) job/default-unique-states)))
+                          (job/states->bitmask (job/unique-states unique-opts)))
           scheduled-at (or (:scheduled-at opts) now)
           initial-state (if (.isAfter ^Instant scheduled-at now) "scheduled" "available")
           timeout-ms (job/duration-ms (:timeout opts))
-          ttl-ms (job/duration-ms (:ttl opts))
-          result (try
-                   (jdbc/execute-one!
-                    tx
-                    ["INSERT INTO drip_job
+          ttl-ms (job/duration-ms (:ttl opts))]
+      (db/insert-unique!
+       unique-violation?
+       (fn []
+         (let [result (jdbc/execute-one!
+                       tx
+                       ["INSERT INTO drip_job
                         (attempt, attempted_by, encoded_args, errors,
                          kind, max_attempts, metadata, priority,
                          queue, scheduled_at, state, tags,
@@ -86,31 +93,31 @@
                               ?, ?, ?, ?,
                               ?, ?, ?, ?,
                               ?, ?, ?, ?, ?)"
-                     encoded-args
-                     kind
-                     (int (:max-attempts opts))
-                     (db/->json-str (:metadata opts))
-                     (int (:priority opts))
-                     queue
-                     (encode-ts scheduled-at)
-                     initial-state
-                     (db/->json-str (:tags opts))
-                     unique-key
-                     unique-states
-                     (if (:ephemeral opts) 1 0)
-                     timeout-ms
-                     ttl-ms]
-                    {:return-keys true})
-                   (catch SQLiteException e
-                     (when-not (= SQLiteErrorCode/SQLITE_CONSTRAINT_UNIQUE (.getResultCode ^SQLiteException e))
-                       (throw e))
-                     (throw (db/unique-conflict-ex kind queue unique-opts e))))]
-      (row->job
-       (jdbc/execute-one!
-        tx
-        ["SELECT * FROM drip_job WHERE id = ?"
-         (get result (keyword "last_insert_rowid()"))]
-        db/jdbc-opts))))
+                        encoded-args
+                        kind
+                        (int (:max-attempts opts))
+                        (db/->json-str (:metadata opts))
+                        (int (:priority opts))
+                        queue
+                        (encode-ts scheduled-at)
+                        initial-state
+                        (db/->json-str (:tags opts))
+                        unique-key
+                        unique-states
+                        (if (:ephemeral opts) 1 0)
+                        timeout-ms
+                        ttl-ms]
+                       {:return-keys true})]
+           (row->job
+            (jdbc/execute-one!
+             tx
+             ["SELECT * FROM drip_job WHERE id = ?"
+              (get result (keyword "last_insert_rowid()"))]
+             db/jdbc-opts))))
+       #(row->job (jdbc/execute-one! tx
+                                     ["SELECT * FROM drip_job WHERE unique_key_active = ?" unique-key]
+                                     db/jdbc-opts))
+       {:kind kind :queue queue :unique-opts unique-opts})))
 
   (fetch-jobs! [_ tx queue worker-id opts]
     (let [{:keys [limit] :or {limit 10}} opts
@@ -156,48 +163,50 @@
                                  ["SELECT * FROM drip_job WHERE id = ?" job-id]
                                  db/jdbc-opts)))
 
-  (complete-job! [_ tx job-id]
-    (let [now (encode-ts (Instant/now))]
-      (jdbc/execute-one!
-       tx
-       ["UPDATE drip_job
-          SET state = 'completed',
-              finalized_at = ?,
-              unique_key = CASE WHEN unique_states IS NOT NULL AND (unique_states & 32) = 0 THEN NULL ELSE unique_key END
-          WHERE id = ? AND state = 'running'"
-        now job-id])
-      (let [job (row->job (jdbc/execute-one! tx
-                                             ["SELECT * FROM drip_job WHERE id = ?" job-id]
-                                             db/jdbc-opts))]
-        (when (:ephemeral job)
+  (complete-job! [_ tx job]
+    (let [job-id (:id job)
+          result (jdbc/execute-one!
+                  tx
+                  ["UPDATE drip_job
+                     SET state = 'completed',
+                         finalized_at = ?
+                     WHERE id = ? AND state = 'running' AND json_array_length(attempted_by) = ?"
+                   (encode-ts (Instant/now)) job-id (job/claim job)])]
+      (when (zero? (long (:next.jdbc/update-count result 0)))
+        (throw (db/claim-lost-ex job)))
+      (let [completed (row->job (jdbc/execute-one! tx
+                                                   ["SELECT * FROM drip_job WHERE id = ?" job-id]
+                                                   db/jdbc-opts))]
+        (when (:ephemeral completed)
           (jdbc/execute-one! tx ["DELETE FROM drip_job WHERE id = ?" job-id]))
-        job)))
+        completed)))
 
-  (fail-job! [_ tx job-id error-map retry-policy]
+  (fail-job! [_ tx job error-map retry-policy]
     (let [now (Instant/now)
-          job (row->job (jdbc/execute-one! tx
-                                           ["SELECT * FROM drip_job WHERE id = ?" job-id]
-                                           db/jdbc-opts))
+          job-id (:id job)
+          current (row->job (jdbc/execute-one! tx
+                                               ["SELECT * FROM drip_job
+                                                  WHERE id = ? AND state = 'running' AND json_array_length(attempted_by) = ?"
+                                                job-id (job/claim job)]
+                                               db/jdbc-opts))
+          _ (when-not current (throw (db/claim-lost-ex job)))
           error-entry (assoc error-map :at (str now))
-          new-errors (conj (or (:errors job) []) error-entry)
-          exhausted? (>= (:attempt job) (:max-attempts job))
+          new-errors (conj (or (:errors current) []) error-entry)
+          exhausted? (>= (:attempt current) (:max-attempts current))
           new-state (if exhausted? "discarded" "retryable")
-          new-state-bit (if exhausted? 16 4)
-          next-run (when-not exhausted? (.plusMillis ^Instant now (long (retry-policy (:attempt job)))))]
+          next-run (when-not exhausted? (.plusMillis ^Instant now (long (retry-policy (:attempt current)))))]
       (jdbc/execute-one!
        tx
        ["UPDATE drip_job
           SET state = ?,
               errors = ?,
               scheduled_at = COALESCE(?, scheduled_at),
-              finalized_at = ?,
-              unique_key = CASE WHEN unique_states IS NOT NULL AND (unique_states & ?) = 0 THEN NULL ELSE unique_key END
+              finalized_at = ?
           WHERE id = ? AND state = 'running'"
         new-state
         (db/->json-str new-errors)
         (encode-ts next-run)
         (encode-ts (when exhausted? now))
-        new-state-bit
         job-id])
       (row->job (jdbc/execute-one! tx
                                    ["SELECT * FROM drip_job WHERE id = ?" job-id]
@@ -209,8 +218,7 @@
        tx
        ["UPDATE drip_job
           SET state = 'cancelled',
-              finalized_at = ?,
-              unique_key = CASE WHEN unique_states IS NOT NULL AND (unique_states & 64) = 0 THEN NULL ELSE unique_key END
+              finalized_at = ?
           WHERE id = ? AND state NOT IN ('cancelled','completed','discarded')"
         now job-id])
       (row->job (jdbc/execute-one! tx
@@ -219,11 +227,13 @@
 
   (retry-job! [_ tx job-id]
     (let [now (encode-ts (Instant/now))]
-      (jdbc/execute-one!
-       tx
-       ["UPDATE drip_job SET state = 'available', scheduled_at = ?, finalized_at = NULL
-          WHERE id = ? AND state IN ('retryable','discarded','cancelled')"
-        now job-id])
+      (db/rethrow-unique-conflict
+       unique-violation? {:job-id job-id}
+       #(jdbc/execute-one!
+         tx
+         ["UPDATE drip_job SET state = 'available', scheduled_at = ?, finalized_at = NULL
+            WHERE id = ? AND state IN ('retryable','discarded','cancelled')"
+          now job-id]))
       (row->job (jdbc/execute-one! tx
                                    ["SELECT * FROM drip_job WHERE id = ?" job-id]
                                    db/jdbc-opts))))
@@ -234,25 +244,27 @@
        tx
        ["UPDATE drip_job
           SET state = 'discarded',
-              finalized_at = ?,
-              unique_key = CASE WHEN unique_states IS NOT NULL AND (unique_states & 16) = 0 THEN NULL ELSE unique_key END
+              finalized_at = ?
           WHERE id = ? AND state NOT IN ('completed','discarded')"
         now job-id])
       (row->job (jdbc/execute-one! tx
                                    ["SELECT * FROM drip_job WHERE id = ?" job-id]
                                    db/jdbc-opts))))
 
-  (snooze-job! [_ tx job-id dur]
-    (let [wake-at (encode-ts (.plusMillis (Instant/now) (long (duration/duration dur))))]
-      (jdbc/execute-one!
-       tx
-       ["UPDATE drip_job
-          SET state = 'scheduled',
-              scheduled_at = ?,
-              attempt = attempt - 1,
-              finalized_at = NULL
-          WHERE id = ? AND state = 'running'"
-        wake-at job-id])
+  (snooze-job! [_ tx job dur]
+    (let [job-id (:id job)
+          wake-at (encode-ts (.plusMillis (Instant/now) (long (duration/duration dur))))
+          result (jdbc/execute-one!
+                  tx
+                  ["UPDATE drip_job
+                     SET state = 'scheduled',
+                         scheduled_at = ?,
+                         attempt = attempt - 1,
+                         finalized_at = NULL
+                     WHERE id = ? AND state = 'running' AND json_array_length(attempted_by) = ?"
+                   wake-at job-id (job/claim job)])]
+      (when (zero? (long (:next.jdbc/update-count result 0)))
+        (throw (db/claim-lost-ex job)))
       (row->job (jdbc/execute-one! tx
                                    ["SELECT * FROM drip_job WHERE id = ?" job-id]
                                    db/jdbc-opts))))
@@ -280,7 +292,8 @@
                        (str/join ", " (map first sets))
                        " WHERE id = ?")
               params (conj (mapv second sets) job-id)]
-          (jdbc/execute-one! tx (into [sql] params))))
+          (db/rethrow-unique-conflict unique-violation? {:job-id job-id}
+                                      #(jdbc/execute-one! tx (into [sql] params)))))
       (row->job (jdbc/execute-one! tx
                                    ["SELECT * FROM drip_job WHERE id = ?" job-id]
                                    db/jdbc-opts))))
@@ -317,7 +330,6 @@
        (fn [^long n row]
          (let [exhausted? (>= (:attempt row) (:max-attempts row))
                new-state (if exhausted? "discarded" "retryable")
-               new-state-bit (if exhausted? 16 4)
                next-run (when-not exhausted? (.plusMillis ^Instant now (long (retry-policy (:attempt row)))))
                job (row->job (jdbc/execute-one! tx
                                                 ["SELECT * FROM drip_job WHERE id = ?" (:id row)]
@@ -329,14 +341,12 @@
                SET state = ?,
                    errors = ?,
                    scheduled_at = COALESCE(?, scheduled_at),
-                   finalized_at = ?,
-                   unique_key = CASE WHEN unique_states IS NOT NULL AND (unique_states & ?) = 0 THEN NULL ELSE unique_key END
+                   finalized_at = ?
                WHERE id = ? AND state = 'running'"
              new-state
              (db/->json-str new-errors)
              (encode-ts next-run)
              (encode-ts (when exhausted? now))
-             new-state-bit
              (:id row)])
            (inc n)))
        0
@@ -419,8 +429,7 @@
                   tx
                   ["UPDATE drip_job
                      SET state = 'discarded',
-                         finalized_at = ?,
-                         unique_key = CASE WHEN unique_states IS NOT NULL AND (unique_states & 16) = 0 THEN NULL ELSE unique_key END
+                         finalized_at = ?
                      WHERE state IN ('available','scheduled','retryable')
                        AND ttl_ms IS NOT NULL
                        AND datetime(created_at, '+' || (ttl_ms / 1000) || ' seconds') <= datetime('now')"
@@ -468,12 +477,30 @@
   client/Maintenance
   (reindex! [_] {}))
 
+(defn- transaction-mode [ds]
+  (with-open [conn (.getConnection ^javax.sql.DataSource ds)]
+    (.getTransactionMode (.getConnectionConfig ^SQLiteConnection (.unwrap conn SQLiteConnection)))))
+
 (defn make-client
   "Returns a SQLite client. `ds` is a javax.sql.DataSource.
-   Enables WAL mode and sets a 5-second busy timeout so concurrent
-   worker threads can share the same database file without SQLITE_BUSY errors."
+
+   Concurrent workers need every connection configured with an IMMEDIATE
+   transaction mode and a busy timeout, e.g.:
+
+     jdbc:sqlite:drip.db?journal_mode=WAL&busy_timeout=5000&transaction_mode=IMMEDIATE
+
+   With SQLite's default DEFERRED mode, a transaction that reads before it
+   writes cannot take the write lock once another connection has written, and
+   fails with SQLITE_BUSY immediately (busy_timeout does not apply). A warning
+   is logged when the datasource is not in IMMEDIATE mode.
+
+   Also enables WAL mode, which persists in the database file."
   [ds]
   (Class/forName "org.sqlite.JDBC")
   (jdbc/execute! ds ["PRAGMA journal_mode=WAL"])
   (jdbc/execute! ds ["PRAGMA busy_timeout=5000"])
+  (let [mode (transaction-mode ds)]
+    (when-not (#{SQLiteConfig$TransactionMode/IMMEDIATE SQLiteConfig$TransactionMode/EXCLUSIVE} mode)
+      (log/warn "drip: SQLite datasource uses" (str mode) "transactions; concurrent workers"
+                "will hit SQLITE_BUSY. Add transaction_mode=IMMEDIATE to the JDBC URL.")))
   (->SQLiteClient ds))

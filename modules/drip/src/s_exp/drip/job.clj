@@ -61,6 +61,38 @@
 (def default-unique-states
   #{:available :pending :running :scheduled :retryable :completed})
 
+;; Active states move into each other automatically (fetch, fail, snooze,
+;; promote). If one of them were left out of a job's unique states, a
+;; duplicate could be inserted while the job sits in it and the two would
+;; collide on the next automatic transition. Only finalized states are optional.
+(def required-unique-states
+  #{:available :pending :running :scheduled :retryable})
+
+(defn unique-states
+  "Returns the set of states in which a unique job holds its slot:
+   (:by-state unique-opts), or default-unique-states when absent.
+   Throws IllegalArgumentException unless it includes required-unique-states."
+  [unique-opts]
+  (let [states (set (or (:by-state unique-opts) default-unique-states))
+        missing (remove states required-unique-states)]
+    (when (seq missing)
+      (throw (IllegalArgumentException.
+              (str ":by-state must include all active states, missing: " (set missing)))))
+    states))
+
+(defn claim
+  "Returns the claim number of job, a Job record from fetch-jobs!: how many
+   times the job has been claimed. Each fetch appends to attempted_by and
+   nothing removes from it (snooze does not either), so the number only grows.
+   complete-job!, snooze-job! and fail-job! use it as a fencing token: they
+   only act while the job is still running under that claim."
+  ^long [job]
+  (when-not (and (map? job) (some? (:id job)) (sequential? (:attempted-by job)))
+    (throw (IllegalArgumentException.
+            (str "Expected a Job record (as passed to handlers or returned by fetch-jobs!), got: "
+                 (pr-str job)))))
+  (count (:attempted-by job)))
+
 (defn duration-ms
   "Converts a duration (ms number or duration string) to a long of milliseconds.
    Returns nil for nil."

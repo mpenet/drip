@@ -40,7 +40,7 @@
         {:client (make-fn
                   (jdbc/get-datasource
                    (str "jdbc:sqlite:" (.getAbsolutePath tmp)
-                        "?journal_mode=WAL&busy_timeout=5000")))
+                        "?journal_mode=WAL&busy_timeout=5000&transaction_mode=IMMEDIATE")))
          :cleanup #(.delete tmp)})
 
       ("mariadb" "postgres")

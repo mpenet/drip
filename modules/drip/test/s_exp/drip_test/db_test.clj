@@ -10,6 +10,11 @@
 
 (use-fixtures :each with-db)
 
+(defn- current
+  "Re-reads job, so it carries its latest claim (for complete/fail/snooze)."
+  [job]
+  (drip/get-job *client* (:id job)))
+
 (defn- postgres? []
   (= "s_exp.drip.client.postgres.PostgresClient" (.getName (class *client*))))
 
@@ -166,14 +171,14 @@
     (let [j (drip/insert-job *client* "k2" {} nil)
           _ (drip/fetch-jobs *client* "default" "w1" :limit 1)
           done (drip/with-tx [tx *client*]
-                 (drip-client/complete-job! *client* tx (:id j)))]
+                 (drip-client/complete-job! *client* tx (current j)))]
       (is (= :completed (:state done)))
       (is (some? (:finalized-at done)))))
 
   (testing "no-tx complete-job variant"
     (let [j (drip/insert-job *client* "k3" {} nil)
           _ (drip/fetch-jobs *client* "default" "w1" :limit 1)
-          done (drip/complete-job *client* (:id j))]
+          done (drip/complete-job *client* (current j))]
       (is (= :completed (:state done)))
       (is (some? (:finalized-at done)))))
 
@@ -182,15 +187,94 @@
       (is (every? #(not= :completed (:state %)) jobs)))))
 
 ;; ---------------------------------------------------------------------------
+;; Claim fencing
+;;
+;; complete-job!, snooze-job! and fail-job! act on the claim (fetch) that
+;; produced the job map. Once the job has been re-claimed, a stale map must
+;; not change it.
+;; ---------------------------------------------------------------------------
+
+(defn- reclaim
+  "Claims j, fails that claim, and claims it again. Returns [stale fresh]."
+  [j]
+  (let [[stale] (drip/fetch-jobs *client* (:queue j) "w1" :limit 1)]
+    (drip/with-tx [tx *client*]
+      (drip-client/fail-job! *client* tx stale {:error "lost"} (job/immediate-retry-policy))
+      (drip-client/promote-scheduled-jobs! *client* tx))
+    [stale (first (drip/fetch-jobs *client* (:queue j) "w2" :limit 1))]))
+
+(defn- claim-lost? [f]
+  (try
+    (f)
+    false
+    (catch clojure.lang.ExceptionInfo e
+      (= :s-exp.drip/claim-lost (:type (ex-data e))))))
+
+(deftest claim-fencing-test
+  (testing "complete-job! with a stale claim throws and leaves the new claim running"
+    (let [j (drip/insert-job *client* "fence" {} {:queue "fence-1"})
+          [stale fresh] (reclaim j)]
+      (is (= (:id stale) (:id fresh)))
+      (is (claim-lost? #(drip/complete-job *client* stale)))
+      (is (= :running (:state (drip/get-job *client* (:id j)))))
+      (is (= :completed (:state (drip/complete-job *client* fresh))))))
+
+  (testing "snooze-job! with a stale claim throws"
+    (let [j (drip/insert-job *client* "fence" {} {:queue "fence-2"})
+          [stale _] (reclaim j)]
+      (is (claim-lost? #(drip/snooze-job *client* stale "1h")))
+      (is (= :running (:state (drip/get-job *client* (:id j)))))))
+
+  (testing "fail-job! with a stale claim throws"
+    (let [j (drip/insert-job *client* "fence" {} {:queue "fence-3"})
+          [stale _] (reclaim j)]
+      (is (claim-lost? #(drip/with-tx [tx *client*]
+                          (drip-client/fail-job! *client* tx stale {:error "x"}
+                                                 (job/immediate-retry-policy)))))
+      (is (= :running (:state (drip/get-job *client* (:id j)))))))
+
+  (testing "completing an unclaimed job throws"
+    (let [j (drip/insert-job *client* "fence" {} {:queue "fence-4"})]
+      (is (claim-lost? #(drip/complete-job *client* j)))))
+
+  (testing "a stale complete rolls back the caller's transaction"
+    (let [j (drip/insert-job *client* "fence" {} {:queue "fence-5"})
+          [stale _] (reclaim j)]
+      (is (claim-lost? #(drip/with-tx [tx *client*]
+                          (drip/insert-job! *client* tx "fence_side_effect" {} nil)
+                          (drip/complete-job! *client* tx stale))))
+      (is (empty? (drip/list-jobs *client* {:kind "fence_side_effect"})))))
+
+  (testing "a job id instead of a job map is rejected"
+    (let [j (drip/insert-job *client* "fence" {} {:queue "fence-6"})
+          [running] (drip/fetch-jobs *client* "fence-6" "w1" :limit 1)]
+      (is (thrown? IllegalArgumentException (drip/complete-job *client* (:id running))))
+      (is (= :running (:state (drip/get-job *client* (:id j))))))))
+
+;; ---------------------------------------------------------------------------
 ;; fail-job
 ;; ---------------------------------------------------------------------------
+
+(deftest concurrent-fail-job-test
+  (testing "jobs failed concurrently in separate transactions are all recorded"
+    (dotimes [_ 4] (drip/insert-job *client* "conc_fail" {} {:queue "conc-fail"}))
+    (let [jobs (drip/fetch-jobs *client* "conc-fail" "w" :limit 4)
+          results (->> jobs
+                       (mapv (fn [j]
+                               (future
+                                 (drip/with-tx [tx *client*]
+                                   (:state (drip-client/fail-job! *client* tx j {:error "x"}
+                                                                  job/default-retry-policy))))))
+                       (mapv deref))]
+      (is (= 4 (count jobs)))
+      (is (every? #{:retryable} results)))))
 
 (deftest fail-job-retryable
   (testing "failure with attempts remaining → :retryable"
     (let [j (drip/insert-job *client* "k" {} {:max-attempts 3})
           _ (drip/fetch-jobs *client* "default" "w" :limit 1)
           failed (drip/with-tx [tx *client*]
-                   (drip-client/fail-job! *client* tx (:id j)
+                   (drip-client/fail-job! *client* tx (current j)
                                           {:error "boom" :trace "stack"}
                                           job/default-retry-policy))]
       (is (= :retryable (:state failed)))
@@ -205,7 +289,7 @@
     (let [j (drip/insert-job *client* "k" {} {:max-attempts 1})
           _ (drip/fetch-jobs *client* "default" "w" :limit 1)
           failed (drip/with-tx [tx *client*]
-                   (drip-client/fail-job! *client* tx (:id j)
+                   (drip-client/fail-job! *client* tx (current j)
                                           {:error "fatal"}
                                           job/default-retry-policy))]
       (is (= :discarded (:state failed)))
@@ -232,7 +316,7 @@
     (let [j (drip/insert-job *client* "k" {} nil)
           _ (drip/fetch-jobs *client* "default" "w" :limit 1)
           _ (drip/with-tx [tx *client*]
-              (drip-client/complete-job! *client* tx (:id j)))
+              (drip-client/complete-job! *client* tx (current j)))
           after (drip/cancel-job *client* (:id j))]
       (is (= :completed (:state after))))))
 
@@ -245,7 +329,7 @@
     (let [j (drip/insert-job *client* "k" {} {:max-attempts 1})
           _ (drip/fetch-jobs *client* "default" "w" :limit 1)
           _ (drip/with-tx [tx *client*]
-              (drip-client/fail-job! *client* tx (:id j)
+              (drip-client/fail-job! *client* tx (current j)
                                      {:error "x"} job/default-retry-policy))
           r (drip/retry-job *client* (:id j))]
       (is (= :available (:state r)))))
@@ -268,7 +352,7 @@
     (let [j (drip/insert-job *client* "k" {} {:max-attempts 1 :queue "retry-discard-q"})
           _ (drip/fetch-jobs *client* "retry-discard-q" "w2" :limit 1)
           discarded (drip/with-tx [tx *client*]
-                      (drip-client/fail-job! *client* tx (:id j)
+                      (drip-client/fail-job! *client* tx (current j)
                                              {:error "x"} job/default-retry-policy))]
       (is (= :discarded (:state discarded)))
       (is (some? (:finalized-at discarded)))
@@ -292,7 +376,7 @@
     (let [j (drip/insert-job *client* "k" {} {:max-attempts 1})
           _ (drip/fetch-jobs *client* "default" "w" :limit 1)
           _ (drip/with-tx [tx *client*]
-              (drip-client/fail-job! *client* tx (:id j)
+              (drip-client/fail-job! *client* tx (current j)
                                      {:error "x"} job/default-retry-policy))
           d (drip/discard-job *client* (:id j))]
       (is (= :discarded (:state d))))))
@@ -317,13 +401,16 @@
         (is (= :available (:state promoted)))))))
 
 ;; ---------------------------------------------------------------------------
-;; Unique key clearing on finalization
+;; Unique slots
 ;;
-;; When a job transitions to a state NOT in its unique_states bitmask, the
-;; unique_key must be cleared so a new identical job can be inserted.
-;; MariaDB/SQLite do this with a CASE expression in the UPDATE; PostgreSQL
-;; uses a partial index.
+;; A job occupies its unique slot exactly while its state is in its
+;; unique_states bitmask. Every backend enforces this at the index level
+;; (PostgreSQL: partial index; MariaDB/SQLite: index on a generated column).
 ;; ---------------------------------------------------------------------------
+
+(defn- skipped? [job] (true? (:unique-skipped job)))
+
+(defn- inserted? [job] (false? (:unique-skipped job)))
 
 (defn- unique-opts-with-states [states]
   {:unique-opts {:by-args true :by-period nil :by-queue false :by-state states}})
@@ -333,9 +420,9 @@
     (let [opts (unique-opts-with-states job/default-unique-states)
           j (drip/insert-job *client* "uk_cancel_clear" {:n 1} opts)]
       (is (some? (:unique-key j)))
-      (is (thrown? Exception (drip/insert-job *client* "uk_cancel_clear" {:n 1} opts)))
+      (is (skipped? (drip/insert-job *client* "uk_cancel_clear" {:n 1} opts)))
       (let [cancelled (drip/cancel-job *client* (:id j))]
-        (is (some? (drip/insert-job *client* "uk_cancel_clear" {:n 1} opts))))))
+        (is (inserted? (drip/insert-job *client* "uk_cancel_clear" {:n 1} opts))))))
 
   (testing "cancel-job! keeps unique_key when :cancelled IS in unique_states"
     (let [opts (unique-opts-with-states (conj job/default-unique-states :cancelled))
@@ -343,7 +430,7 @@
       (is (some? (:unique-key j)))
       (let [cancelled (drip/cancel-job *client* (:id j))]
         (is (some? (:unique-key cancelled)))
-        (is (thrown? Exception (drip/insert-job *client* "uk_cancel_keep" {:n 1} opts)))))))
+        (is (skipped? (drip/insert-job *client* "uk_cancel_keep" {:n 1} opts)))))))
 
 (deftest unique-key-discard-clears-by-default
   (testing "discard-job! clears unique_key when :discarded not in unique_states"
@@ -351,7 +438,7 @@
           j (drip/insert-job *client* "uk_discard_clear" {:n 1} opts)
           _ (drip/fetch-jobs *client* "default" "w" :limit 1)
           discarded (drip/discard-job *client* (:id j))]
-      (is (some? (drip/insert-job *client* "uk_discard_clear" {:n 1} opts)))))
+      (is (inserted? (drip/insert-job *client* "uk_discard_clear" {:n 1} opts)))))
 
   (testing "discard-job! keeps unique_key when :discarded IS in unique_states"
     (let [opts (unique-opts-with-states (conj job/default-unique-states :discarded))
@@ -359,7 +446,7 @@
           _ (drip/fetch-jobs *client* "default" "w" :limit 1)
           discarded (drip/discard-job *client* (:id j))]
       (is (some? (:unique-key discarded)))
-      (is (thrown? Exception (drip/insert-job *client* "uk_discard_keep" {:n 1} opts))))))
+      (is (skipped? (drip/insert-job *client* "uk_discard_keep" {:n 1} opts))))))
 
 (deftest unique-key-complete-respects-bitmask
   (testing "complete-job! keeps unique_key when :completed IS in unique_states (default)"
@@ -367,17 +454,17 @@
           j (drip/insert-job *client* "uk_complete_keep" {:n 1} opts)
           _ (drip/fetch-jobs *client* "default" "w" :limit 1)
           done (drip/with-tx [tx *client*]
-                 (drip-client/complete-job! *client* tx (:id j)))]
+                 (drip-client/complete-job! *client* tx (current j)))]
       (is (some? (:unique-key done)))
-      (is (thrown? Exception (drip/insert-job *client* "uk_complete_keep" {:n 1} opts)))))
+      (is (skipped? (drip/insert-job *client* "uk_complete_keep" {:n 1} opts)))))
 
-  (testing "complete-job! clears unique_key when :completed NOT in unique_states"
-    (let [opts (unique-opts-with-states #{:available :running :scheduled})
+  (testing "complete-job! frees the slot when :completed NOT in unique_states"
+    (let [opts (unique-opts-with-states (disj job/default-unique-states :completed))
           j (drip/insert-job *client* "uk_complete_clear" {:n 1} opts)
           _ (drip/fetch-jobs *client* "default" "w" :limit 1)
           done (drip/with-tx [tx *client*]
-                 (drip-client/complete-job! *client* tx (:id j)))]
-      (is (some? (drip/insert-job *client* "uk_complete_clear" {:n 1} opts))))))
+                 (drip-client/complete-job! *client* tx (current j)))]
+      (is (inserted? (drip/insert-job *client* "uk_complete_clear" {:n 1} opts))))))
 
 (deftest unique-key-fail-job-exhausted-clears
   (testing "fail-job! clears unique_key when exhausted → :discarded not in unique_states"
@@ -385,10 +472,10 @@
           j (drip/insert-job *client* "uk_fail_exhausted" {:n 1} (merge opts {:max-attempts 1}))
           _ (drip/fetch-jobs *client* "default" "w" :limit 1)
           failed (drip/with-tx [tx *client*]
-                   (drip-client/fail-job! *client* tx (:id j)
+                   (drip-client/fail-job! *client* tx (current j)
                                           {:error "x"} job/default-retry-policy))]
       (is (= :discarded (:state failed)))
-      (is (some? (drip/insert-job *client* "uk_fail_exhausted" {:n 1} opts))))))
+      (is (inserted? (drip/insert-job *client* "uk_fail_exhausted" {:n 1} opts))))))
 
 (deftest unique-key-fail-job-retryable-keeps
   (testing "fail-job! keeps unique_key when not exhausted → :retryable IS in unique_states"
@@ -396,11 +483,11 @@
           j (drip/insert-job *client* "uk_fail_retry" {:n 1} (merge opts {:max-attempts 3}))
           _ (drip/fetch-jobs *client* "default" "w" :limit 1)
           failed (drip/with-tx [tx *client*]
-                   (drip-client/fail-job! *client* tx (:id j)
+                   (drip-client/fail-job! *client* tx (current j)
                                           {:error "x"} job/default-retry-policy))]
       (is (= :retryable (:state failed)))
       (is (some? (:unique-key failed)))
-      (is (thrown? Exception (drip/insert-job *client* "uk_fail_retry" {:n 1} opts))))))
+      (is (skipped? (drip/insert-job *client* "uk_fail_retry" {:n 1} opts))))))
 
 (deftest unique-key-rescue-stuck-jobs-exhausted-clears
   (testing "rescue-stuck-jobs! clears unique_key when exhausted → :discarded not in unique_states"
@@ -416,7 +503,7 @@
         (drip-client/rescue-stuck-jobs! *client* tx stuck-after job/default-retry-policy nil))
       (let [rescued (drip/get-job *client* (:id j))]
         (is (= :discarded (:state rescued)))
-        (is (some? (drip/insert-job *client* "uk_rescue_exhausted" {:n 1} opts)))))))
+        (is (inserted? (drip/insert-job *client* "uk_rescue_exhausted" {:n 1} opts)))))))
 
 (deftest unique-key-rescue-stuck-jobs-retryable-keeps
   (testing "rescue-stuck-jobs! keeps slot when not exhausted → :retryable in unique_states"
@@ -432,7 +519,7 @@
         (drip-client/rescue-stuck-jobs! *client* tx stuck-after job/default-retry-policy nil))
       (let [rescued (drip/get-job *client* (:id j))]
         (is (= :retryable (:state rescued)))
-        (is (thrown? Exception (drip/insert-job *client* "uk_rescue_retry" {:n 1} opts)))))))
+        (is (skipped? (drip/insert-job *client* "uk_rescue_retry" {:n 1} opts)))))))
 
 (deftest unique-key-snooze-keeps
   (testing "snooze-job! keeps slot when :scheduled in unique_states"
@@ -440,9 +527,9 @@
           j (drip/insert-job *client* "uk_snooze" {:n 1} opts)
           _ (drip/fetch-jobs *client* "default" "w" :limit 1)]
       (drip/with-tx [tx *client*]
-        (drip-client/snooze-job! *client* tx (:id j) "1h"))
+        (drip-client/snooze-job! *client* tx (current j) "1h"))
       (is (= :scheduled (:state (drip/get-job *client* (:id j)))))
-      (is (thrown? Exception (drip/insert-job *client* "uk_snooze" {:n 1} opts))))))
+      (is (skipped? (drip/insert-job *client* "uk_snooze" {:n 1} opts))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Bitmask per-state boundary tests
@@ -451,32 +538,37 @@
 ;; occupied exactly when the job is in a state that IS in unique_states.
 ;; ---------------------------------------------------------------------------
 
-(deftest unique-key-bitmask-available-only
-  (testing "unique_states=#{:available}: PostgreSQL partial index frees slot on transition to :running"
-    ;; On PostgreSQL the partial index only covers :available rows, so fetching (→ :running)
-    ;; immediately frees the slot. On MariaDB/SQLite the plain UNIQUE index keeps the slot
-    ;; occupied until explicit clearing on finalization.
-    (let [opts (unique-opts-with-states #{:available})
-          j (drip/insert-job *client* "uk_bit_avail" {:n 1} opts)]
-      (is (thrown? Exception (drip/insert-job *client* "uk_bit_avail" {:n 1} opts)))
-      (drip/fetch-jobs *client* "default" "w" :limit 1)
-      (is (= :running (:state (drip/get-job *client* (:id j)))))
-      (if (postgres?)
-        (is (some? (drip/insert-job *client* "uk_bit_avail" {:n 1} opts)))
-        (is (thrown? Exception (drip/insert-job *client* "uk_bit_avail" {:n 1} opts)))))))
+(deftest unique-key-by-state-must-cover-active-states
+  (testing "by-state missing an active state is rejected"
+    (doseq [state [:available :pending :running :scheduled :retryable]]
+      (is (thrown? IllegalArgumentException
+                   (drip/insert-job *client* "uk_bad_states" {}
+                                    (unique-opts-with-states (disj job/default-unique-states state)))))))
+  (testing "by-state with only active states is accepted"
+    (is (inserted? (drip/insert-job *client* "uk_active_states" {}
+                                    (unique-opts-with-states #{:available :pending :running
+                                                               :scheduled :retryable}))))))
 
-(deftest unique-key-bitmask-running-only
-  (testing "unique_states=#{:running}: PostgreSQL partial index leaves slot free while :available"
-    ;; On PostgreSQL the partial index only covers :running rows. While the original job
-    ;; is still :available (not covered), a second insert with the same key is allowed.
-    ;; On MariaDB/SQLite the plain UNIQUE index fires immediately regardless of state.
-    (let [opts (unique-opts-with-states #{:running})]
-      (drip/insert-job *client* "uk_bit_run" {:n 1} opts)
-      (if (postgres?)
-        ;; :available is not in the partial index → second insert is allowed
-        (is (some? (drip/insert-job *client* "uk_bit_run" {:n 1} opts)))
-        ;; MariaDB/SQLite: plain UNIQUE index fires immediately
-        (is (thrown? Exception (drip/insert-job *client* "uk_bit_run" {:n 1} opts)))))))
+(deftest unique-key-retry-reoccupies-slot
+  (testing "retrying a cancelled job makes its slot active again"
+    (let [opts (unique-opts-with-states job/default-unique-states)
+          j (drip/insert-job *client* "uk_retry" {:n 1} opts)]
+      (drip/cancel-job *client* (:id j))
+      (drip/retry-job *client* (:id j))
+      (is (= :available (:state (drip/get-job *client* (:id j)))))
+      (is (skipped? (drip/insert-job *client* "uk_retry" {:n 1} opts)))))
+
+  (testing "retrying a cancelled job while a duplicate is active is a unique conflict"
+    (let [opts (unique-opts-with-states job/default-unique-states)
+          j (drip/insert-job *client* "uk_retry_dup" {:n 1} opts)]
+      (drip/cancel-job *client* (:id j))
+      (drip/insert-job *client* "uk_retry_dup" {:n 1} opts)
+      (try
+        (drip/retry-job *client* (:id j))
+        (is false "expected unique conflict")
+        (catch clojure.lang.ExceptionInfo e
+          (is (= :s-exp.drip/unique-conflict (:type (ex-data e))))))
+      (is (= :cancelled (:state (drip/get-job *client* (:id j))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; by-keys: field-level uniqueness
@@ -488,13 +580,12 @@
           j (drip/insert-job *client* "uk_by_keys" {:customer-id 42 :trace-id "abc"} opts)]
       (is (some? (:unique-key j)))
       ;; Same :customer-id, different :trace-id → conflict
-      (is (thrown? Exception
-                   (drip/insert-job *client* "uk_by_keys" {:customer-id 42 :trace-id "xyz"} opts)))))
+      (is (skipped? (drip/insert-job *client* "uk_by_keys" {:customer-id 42 :trace-id "xyz"} opts)))))
 
   (testing "jobs with different by-keys values do not conflict"
     (let [opts {:unique-opts {:by-keys [:customer-id]}}]
       (drip/insert-job *client* "uk_by_keys2" {:customer-id 1 :trace-id "abc"} opts)
-      (is (some? (drip/insert-job *client* "uk_by_keys2" {:customer-id 2 :trace-id "abc"} opts))))))
+      (is (inserted? (drip/insert-job *client* "uk_by_keys2" {:customer-id 2 :trace-id "abc"} opts))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Unique jobs
@@ -509,23 +600,32 @@
                         :by-state job/default-unique-states}}
           j1 (drip/insert-job *client* "u_kind" {:x 1} unique-opts)]
       (is (some? (:unique-key j1)))
-      (is (thrown? Exception
-                   (drip/insert-job *client* "u_kind" {:x 1} unique-opts)))))
+      (is (skipped? (drip/insert-job *client* "u_kind" {:x 1} unique-opts)))))
 
-  (testing "conflict throws ExceptionInfo with :type :s-exp.drip/unique-conflict"
-    (let [unique-opts {:unique-opts
-                       {:by-args true
-                        :by-period nil
-                        :by-queue false
-                        :by-state job/default-unique-states}}]
-      (drip/insert-job *client* "u_kind_ex" {:x 42} unique-opts)
-      (try
-        (drip/insert-job *client* "u_kind_ex" {:x 42} unique-opts)
-        (is false "expected exception")
-        (catch clojure.lang.ExceptionInfo e
-          (is (= :s-exp.drip/unique-conflict (:type (ex-data e))))
-          (is (= "u_kind_ex" (:kind (ex-data e))))
-          (is (instance? java.sql.SQLException (ex-cause e)))))))
+  (testing "duplicate returns the existing job flagged :unique-skipped"
+    (let [unique-opts {:unique-opts {:by-args true}}
+          j1 (drip/insert-job *client* "u_kind_ex" {:x 42} unique-opts)
+          j2 (drip/insert-job *client* "u_kind_ex" {:x 42} unique-opts)]
+      (is (inserted? j1))
+      (is (skipped? j2))
+      (is (= (:id j1) (:id j2)))
+      (is (= 1 (count (drip/list-jobs *client* {:kind "u_kind_ex"}))))))
+
+  (testing "duplicate inside a caller's transaction leaves the transaction usable"
+    (let [unique-opts {:unique-opts {:by-args true}}]
+      (drip/with-tx [tx *client*]
+        (drip/insert-job! *client* tx "u_kind_tx" {:x 1} unique-opts)
+        (is (skipped? (drip/insert-job! *client* tx "u_kind_tx" {:x 1} unique-opts)))
+        (drip/insert-job! *client* tx "u_kind_tx_after" {} nil))
+      (is (= 1 (count (drip/list-jobs *client* {:kind "u_kind_tx_after"}))))))
+
+  (testing "exclude-kind duplicate returns the existing job unchanged"
+    (let [unique-opts {:unique-opts {:by-args true :exclude-kind true}}
+          j1 (drip/insert-job *client* "u_kind_a" {:shared 1} unique-opts)
+          j2 (drip/insert-job *client* "u_kind_b" {:shared 1} unique-opts)]
+      (is (skipped? j2))
+      (is (= (:id j1) (:id j2)))
+      (is (= "u_kind_a" (:kind j2)))))
 
   (testing "different args do not conflict"
     (let [unique-opts {:unique-opts
@@ -534,7 +634,7 @@
                         :by-queue false
                         :by-state job/default-unique-states}}]
       (drip/insert-job *client* "u_kind2" {:x 1} unique-opts)
-      (is (some? (drip/insert-job *client* "u_kind2" {:x 2} unique-opts))))))
+      (is (inserted? (drip/insert-job *client* "u_kind2" {:x 2} unique-opts))))))
 
 (deftest unique-job-by-queue
   (testing "same kind+args conflict per queue when by-queue true"
@@ -544,9 +644,8 @@
                  :by-queue true
                  :by-state job/default-unique-states}}]
       (drip/insert-job *client* "qk" {} (assoc opts :queue "qa"))
-      (is (thrown? Exception
-                   (drip/insert-job *client* "qk" {} (assoc opts :queue "qa"))))
-      (is (some? (drip/insert-job *client* "qk" {} (assoc opts :queue "qb")))))))
+      (is (skipped? (drip/insert-job *client* "qk" {} (assoc opts :queue "qa"))))
+      (is (inserted? (drip/insert-job *client* "qk" {} (assoc opts :queue "qb")))))))
 
 ;; ---------------------------------------------------------------------------
 ;; insert-many
@@ -571,7 +670,7 @@
         (is (thrown? Exception
                      (drip/insert-many *client*
                                        [["tx_test_new" {:z 1} nil]
-                                        ["tx_test" {:x 99} unique-opts]])))
+                                        ["tx_test" {:x 99} {:priority 9}]])))
         (is (= before-count (count (drip/list-jobs *client* {:kind "tx_test_new"}))))))))
 
 ;; ---------------------------------------------------------------------------
@@ -650,7 +749,7 @@
           _ (drip/fetch-jobs *client* "default" "w" :limit 1)
           before (.plusSeconds (Instant/now) 55)
           failed (drip/with-tx [tx *client*]
-                   (drip-client/fail-job! *client* tx (:id j)
+                   (drip-client/fail-job! *client* tx (current j)
                                           {:error "x"} custom-policy))]
       (is (= :retryable (:state failed)))
       (is (.isAfter ^Instant (:scheduled-at failed) before)))))
@@ -679,7 +778,7 @@
     (let [j (drip/insert-job *client* "k" {} {:max-attempts 5})]
       (drip/fetch-jobs *client* "default" "w" :limit 1)
       (drip/with-tx [tx *client*]
-        (drip-client/fail-job! *client* tx (:id j)
+        (drip-client/fail-job! *client* tx (current j)
                                {:error "first"} job/default-retry-policy))
       (drip/with-tx [tx *client*]
         (jdbc/execute-one! tx
@@ -689,7 +788,7 @@
         (drip-client/promote-scheduled-jobs! *client* tx))
       (drip/fetch-jobs *client* "default" "w" :limit 1)
       (drip/with-tx [tx *client*]
-        (drip-client/fail-job! *client* tx (:id j)
+        (drip-client/fail-job! *client* tx (current j)
                                {:error "second"} job/default-retry-policy))
       (let [job (drip/get-job *client* (:id j))]
         (is (= 2 (count (:errors job))))
@@ -705,7 +804,7 @@
     (let [j (drip/insert-job *client* "k" {} {:max-attempts 3})
           _ (drip/fetch-jobs *client* "default" "w" :limit 1)
           _ (drip/with-tx [tx *client*]
-              (drip-client/fail-job! *client* tx (:id j)
+              (drip-client/fail-job! *client* tx (current j)
                                      {:error "x"} job/default-retry-policy))
           r (drip/retry-job *client* (:id j))]
       (is (= :available (:state r))))))
@@ -719,7 +818,7 @@
     (let [j (drip/insert-job *client* "k" {} {:max-attempts 5})]
       (drip/fetch-jobs *client* "default" "w1" :limit 1)
       (drip/with-tx [tx *client*]
-        (drip-client/fail-job! *client* tx (:id j) {:error "e1"} job/default-retry-policy))
+        (drip-client/fail-job! *client* tx (current j) {:error "e1"} job/default-retry-policy))
       (drip/with-tx [tx *client*]
         (jdbc/execute-one! tx ["UPDATE drip_job SET scheduled_at = ? WHERE id = ?"
                                (db/instant->ts (.minusSeconds (Instant/now) 1)) (:id j)]))
@@ -793,7 +892,7 @@
                    (drip/with-tx [tx *client*]
                      (drip/insert-many! *client* tx
                                         [["rb_new" {:z 1} nil]
-                                         ["rb_seed" {:x 99} unique-opts]]))))
+                                         ["rb_seed" {:x 99} {:priority 9}]]))))
       (is (= before-count (count (drip/list-jobs *client* {:kind "rb_new"})))))))
 
 ;; ---------------------------------------------------------------------------
@@ -822,8 +921,8 @@
           j2 (drip/insert-job *client* "del_test" {} nil)
           _ (drip/fetch-jobs *client* "default" "w" :limit 10)
           _ (drip/with-tx [tx *client*]
-              (drip-client/complete-job! *client* tx (:id j1))
-              (drip-client/complete-job! *client* tx (:id j2)))
+              (drip-client/complete-job! *client* tx (current j1))
+              (drip-client/complete-job! *client* tx (current j2)))
           n (drip/delete-jobs *client* {:states [:completed]})]
       (is (>= n 2))
       (is (nil? (drip/get-job *client* (:id j1))))
@@ -835,8 +934,8 @@
           j-new (drip/insert-job *client* "del_new" {} nil)
           _ (drip/fetch-jobs *client* "default" "w" :limit 10)
           _ (drip/with-tx [tx *client*]
-              (drip-client/complete-job! *client* tx (:id j-old))
-              (drip-client/complete-job! *client* tx (:id j-new)))
+              (drip-client/complete-job! *client* tx (current j-old))
+              (drip-client/complete-job! *client* tx (current j-new)))
           cutoff (.minusSeconds (Instant/now) 86400)
           _ (drip/with-tx [tx *client*]
               (jdbc/execute-one! tx
@@ -853,7 +952,7 @@
           j-cancel (drip/insert-job *client* "multi_del" {} nil)
           _ (drip/fetch-jobs *client* "default" "w" :limit 10)
           _ (drip/with-tx [tx *client*]
-              (drip-client/complete-job! *client* tx (:id j-done)))
+              (drip-client/complete-job! *client* tx (current j-done)))
           _ (drip/cancel-job *client* (:id j-cancel))
           n (drip/delete-jobs *client* {:states [:completed :cancelled]})]
       (is (>= n 2))
@@ -1003,25 +1102,25 @@
           running (drip/get-job *client* (:id j))
           _ (is (= :running (:state running)))
           snoozed (drip/with-tx [tx *client*]
-                    (drip/snooze-job! *client* tx (:id j) "60s"))]
+                    (drip/snooze-job! *client* tx (current j) "60s"))]
       (is (= :scheduled (:state snoozed)))
       (is (.isAfter ^Instant (:scheduled-at snoozed) (Instant/now)))))
   (testing "snoozing does not consume an attempt"
     (let [j (drip/insert-job *client* "snooze_kind" {} {:queue "snooze-q3" :max-attempts 2})
           [running] (drip/fetch-jobs *client* "snooze-q3" "w" :limit 1)
-          _ (drip/snooze-job *client* (:id j) 0)
+          _ (drip/snooze-job *client* (current j) 0)
           _ (drip/with-tx [tx *client*] (drip-client/promote-scheduled-jobs! *client* tx))
           [refetched] (drip/fetch-jobs *client* "snooze-q3" "w" :limit 1)]
       (is (= (:attempt running) (:attempt refetched)))
       (is (= :retryable
              (:state (drip/with-tx [tx *client*]
-                       (drip-client/fail-job! *client* tx (:id j) {:error "boom"}
+                       (drip-client/fail-job! *client* tx (current j) {:error "boom"}
                                               (job/immediate-retry-policy)))))
           "the failure after a snooze is still the first attempt")))
   (testing "snooze-job (no-tx variant) works"
     (let [j (drip/insert-job *client* "snooze_kind2" {} {:queue "snooze-q2"})
           _ (drip/fetch-jobs *client* "snooze-q2" "w" :limit 1)
-          snoozed (drip/snooze-job *client* (:id j) "30s")]
+          snoozed (drip/snooze-job *client* (current j) "30s")]
       (is (= :scheduled (:state snoozed))))))
 
 ;; ---------------------------------------------------------------------------

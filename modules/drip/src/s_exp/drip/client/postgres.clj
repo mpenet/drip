@@ -9,7 +9,7 @@
             [s-exp.duration :as duration])
   (:import (java.io ByteArrayInputStream)
            (java.nio.charset StandardCharsets)
-           (java.sql Array Connection)
+           (java.sql Array Connection SQLException)
            (java.time Instant)
            (org.postgresql PGConnection)
            (org.postgresql.copy CopyManager)))
@@ -111,6 +111,9 @@
 ;; Helpers
 ;; ---------------------------------------------------------------------------
 
+(defn- unique-violation? [^SQLException e]
+  (= "23505" (.getSQLState e)))
+
 (defn- in-clause [ids]
   [(str "(" (str/join "," (repeat (count ids) "?")) ")")
    ids])
@@ -203,17 +206,15 @@
           unique-opts (:unique-opts opts)
           unique-key (db/compute-unique-key kind args queue now unique-opts)
           unique-states-str (when unique-opts
-                              (states->bitmask-str
-                               (or (:by-state unique-opts) job/default-unique-states)))
+                              (states->bitmask-str (job/unique-states unique-opts)))
           scheduled-at (or (:scheduled-at opts) now)
           initial-state (if (.isAfter ^Instant scheduled-at now) "scheduled" "available")
           tags-arr ^"[Ljava.lang.String;" (into-array String (map str (:tags opts)))
           timeout-ms (job/duration-ms (:timeout opts))
           ttl-ms (job/duration-ms (:ttl opts))
-          result (try
-                   (jdbc/execute-one!
-                    tx
-                    ["INSERT INTO drip_job
+          result (jdbc/execute-one!
+                  tx
+                  ["INSERT INTO drip_job
                         (state, attempt, max_attempts, scheduled_at, priority,
                          args, attempted_by, errors,
                          kind, metadata, queue, tags,
@@ -222,27 +223,30 @@
                               ?::jsonb, '{}', '{}',
                               ?, ?::jsonb, ?, ?,
                               ?, ?::bit(8), ?, ?, ?)
-                      RETURNING *"
-                     initial-state
-                     (int (:max-attempts opts))
-                     (encode-ts scheduled-at)
-                     (int (:priority opts))
-                     (db/->json-str args)
-                     kind
-                     (db/->json-str (:metadata opts))
-                     queue
-                     tags-arr
-                     unique-key
-                     unique-states-str
-                     (boolean (:ephemeral opts))
-                     timeout-ms
-                     ttl-ms]
-                    db/jdbc-opts)
-                   (catch java.sql.SQLException e
-                     (when-not (db/unique-conflict-sql-states (.getSQLState e))
-                       (throw e))
-                     (throw (db/unique-conflict-ex kind queue unique-opts e))))]
-      (row->job result)))
+                      ON CONFLICT (unique_key)
+                        WHERE unique_key IS NOT NULL
+                          AND unique_states IS NOT NULL
+                          AND drip_job_state_in_bitmask(unique_states, state)
+                        -- no-op update so RETURNING yields the slot holder;
+                        -- xmax is non-zero only for rows touched by the update
+                        DO UPDATE SET kind = drip_job.kind
+                      RETURNING *, (xmax <> 0) AS unique_skipped"
+                   initial-state
+                   (int (:max-attempts opts))
+                   (encode-ts scheduled-at)
+                   (int (:priority opts))
+                   (db/->json-str args)
+                   kind
+                   (db/->json-str (:metadata opts))
+                   queue
+                   tags-arr
+                   unique-key
+                   unique-states-str
+                   (boolean (:ephemeral opts))
+                   timeout-ms
+                   ttl-ms]
+                  db/jdbc-opts)]
+      (assoc (row->job result) :unique-skipped (boolean (:unique-skipped result)))))
 
   (fetch-jobs! [_ tx queue worker-id opts]
     (let [{:keys [limit] :or {limit 10}} opts
@@ -284,25 +288,32 @@
        (db/->json-str {:output output}) job-id]
       db/jdbc-opts)))
 
-  (complete-job! [_ tx job-id]
-    (let [now (encode-ts (Instant/now))
-          result (jdbc/execute-one!
+  (complete-job! [_ tx job]
+    (let [result (jdbc/execute-one!
                   tx
                   ["UPDATE drip_job SET state = 'completed'::drip_job_state, finalized_at = ?
                      WHERE id = ? AND state = 'running'::drip_job_state
+                       AND cardinality(attempted_by) = ?
                      RETURNING *"
-                   now job-id]
+                   (encode-ts (Instant/now)) (:id job) (job/claim job)]
                   db/jdbc-opts)
-          job (row->job (or result (jdbc/execute-one! tx ["SELECT * FROM drip_job WHERE id = ?" job-id] db/jdbc-opts)))]
-      (when (:ephemeral job)
-        (jdbc/execute-one! tx ["DELETE FROM drip_job WHERE id = ?" job-id]))
-      job))
+          _ (when-not result (throw (db/claim-lost-ex job)))
+          completed (row->job result)]
+      (when (:ephemeral completed)
+        (jdbc/execute-one! tx ["DELETE FROM drip_job WHERE id = ?" (:id job)]))
+      completed))
 
-  (fail-job! [_ tx job-id error-map retry-policy]
+  (fail-job! [_ tx job error-map retry-policy]
     (let [now (Instant/now)
+          job-id (:id job)
           row (jdbc/execute-one! tx
-                                 ["SELECT attempt, max_attempts FROM drip_job WHERE id = ?" job-id]
+                                 ["SELECT attempt, max_attempts FROM drip_job
+                                    WHERE id = ? AND state = 'running'::drip_job_state
+                                      AND cardinality(attempted_by) = ?
+                                    FOR UPDATE"
+                                  job-id (job/claim job)]
                                  db/jdbc-opts)
+          _ (when-not row (throw (db/claim-lost-ex job)))
           error-entry (assoc error-map :at (str now))
           exhausted? (>= (:attempt row) (:max-attempts row))
           new-state (if exhausted? "discarded" "retryable")
@@ -322,9 +333,7 @@
                    (encode-ts (when exhausted? now))
                    job-id]
                   db/jdbc-opts)]
-      (row->job (or result (jdbc/execute-one! tx
-                                              ["SELECT * FROM drip_job WHERE id = ?" job-id]
-                                              db/jdbc-opts)))))
+      (row->job result)))
 
   (cancel-job! [_ tx job-id]
     (let [now (encode-ts (Instant/now))
@@ -344,14 +353,16 @@
 
   (retry-job! [_ tx job-id]
     (let [now (encode-ts (Instant/now))
-          result (jdbc/execute-one!
-                  tx
-                  ["UPDATE drip_job SET state = 'available'::drip_job_state, scheduled_at = ?, finalized_at = NULL
-                     WHERE id = ?
-                       AND state IN ('retryable'::drip_job_state,'discarded'::drip_job_state,'cancelled'::drip_job_state)
-                     RETURNING *"
-                   now job-id]
-                  db/jdbc-opts)]
+          result (db/rethrow-unique-conflict
+                  unique-violation? {:job-id job-id}
+                  #(jdbc/execute-one!
+                    tx
+                    ["UPDATE drip_job SET state = 'available'::drip_job_state, scheduled_at = ?, finalized_at = NULL
+                       WHERE id = ?
+                         AND state IN ('retryable'::drip_job_state,'discarded'::drip_job_state,'cancelled'::drip_job_state)
+                       RETURNING *"
+                     now job-id]
+                    db/jdbc-opts))]
       (row->job (or result (jdbc/execute-one! tx
                                               ["SELECT * FROM drip_job WHERE id = ?" job-id]
                                               db/jdbc-opts)))))
@@ -372,7 +383,7 @@
                                               ["SELECT * FROM drip_job WHERE id = ?" job-id]
                                               db/jdbc-opts)))))
 
-  (snooze-job! [_ tx job-id dur]
+  (snooze-job! [_ tx job dur]
     (let [wake-at (encode-ts (.plusMillis (Instant/now) (long (duration/duration dur))))
           result (jdbc/execute-one!
                   tx
@@ -382,10 +393,12 @@
                          attempt = attempt - 1,
                          finalized_at = NULL
                      WHERE id = ? AND state = 'running'::drip_job_state
+                       AND cardinality(attempted_by) = ?
                      RETURNING *"
-                   wake-at job-id]
+                   wake-at (:id job) (job/claim job)]
                   db/jdbc-opts)]
-      (row->job (or result (jdbc/execute-one! tx ["SELECT * FROM drip_job WHERE id = ?" job-id] db/jdbc-opts)))))
+      (when-not result (throw (db/claim-lost-ex job)))
+      (row->job result)))
 
   (update-job! [_ tx job-id opts]
     (let [now (Instant/now)
@@ -411,7 +424,8 @@
                        (str/join ", " (map first sets))
                        " WHERE id = ?")
               params (conj (mapv second sets) job-id)]
-          (jdbc/execute-one! tx (into [sql] params))))
+          (db/rethrow-unique-conflict unique-violation? {:job-id job-id}
+                                      #(jdbc/execute-one! tx (into [sql] params)))))
       (row->job (jdbc/execute-one! tx
                                    ["SELECT * FROM drip_job WHERE id = ?" job-id]
                                    db/jdbc-opts))))

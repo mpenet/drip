@@ -162,7 +162,7 @@ Complete a job atomically with your own writes. Call `complete-job!` inside your
 {"process_payment" (fn [client job]
                      (drip/with-tx [tx client]
                        (record-payment! tx (:args job))        ; your write
-                       (drip/complete-job! client tx (:id job))))} ; same tx
+                       (drip/complete-job! client tx job)))} ; same tx
 ```
 
 If the transaction rolls back, the job is not marked complete and will retry. If it commits, both the payment record and the job completion are durable.
@@ -228,6 +228,8 @@ All operations take a client as the first argument. Create one with a dialect-sp
 ;; (def client (sqlite/make-client datasource))
 ```
 
+For SQLite, configure the datasource with IMMEDIATE transactions and a busy timeout so concurrent workers don't fail with `SQLITE_BUSY`: `jdbc:sqlite:drip.db?journal_mode=WAL&busy_timeout=5000&transaction_mode=IMMEDIATE`.
+
 ### Inserting jobs
 
 Each function has two variants: one that opens its own transaction (no `!` suffix), and one that takes an explicit transaction (`!` suffix):
@@ -274,17 +276,15 @@ Prevent duplicate jobs using `:unique-opts`:
 | `:by-keys` | Include only these args keys (takes precedence over `:by-args`) |
 | `:by-period` | Floor epoch to period window |
 | `:by-queue` | Include queue name in key |
-| `:by-state` | States that block a duplicate insert (default: all except `:cancelled`/`:discarded`) |
+| `:by-state` | States that block a duplicate insert (default: all except `:cancelled`/`:discarded`). Must include every active state; only finalized states are optional |
 | `:exclude-kind` | Omit job kind from key (cross-kind uniqueness) |
 
-A duplicate insert throws `clojure.lang.ExceptionInfo` with `:type :s-exp.drip/unique-conflict` in `ex-data`. The slot is freed when the job leaves all covered states — cancelled or discarded jobs don't block re-insertion by default. Periodic jobs use unique constraints automatically.
+A duplicate insert inserts nothing and returns the job that holds the slot, with `:unique-skipped true`. New jobs come back with `:unique-skipped false`. The surrounding transaction stays usable, including on PostgreSQL. The slot is freed when the job leaves all covered states — cancelled or discarded jobs don't block re-insertion by default. Periodic jobs use unique constraints automatically.
 
 ```clojure
-(try
-  (drip/insert-job client "daily_report" {} :unique-opts {:by-period "24h"})
-  (catch clojure.lang.ExceptionInfo e
-    (when (= :s-exp.drip/unique-conflict (:type (ex-data e)))
-      :already-queued)))
+(let [job (drip/insert-job client "daily_report" {} :unique-opts {:by-period "24h"})]
+  (when (:unique-skipped job)
+    :already-queued))
 ```
 
 ### Workers
@@ -295,19 +295,19 @@ Registry values are functions of two arguments: `[client job]`. Handlers must ex
 ;; Minimal handler — call complete-job! explicitly
 {"send_email" (fn [client job]
                 (send-email! (:args job))
-                (drip/complete-job client (:id job)))}
+                (drip/complete-job client job))}
 
 ;; Atomic with DB writes
 {"send_email" (fn [client job]
                 (drip/with-tx [tx client]
                   (record-send! tx (:args job))
-                  (drip/complete-job! client tx (:id job))))}
+                  (drip/complete-job! client tx job)))}
 
 ;; Close over dependencies
 (defn email-worker [mailer]
   (fn [client job]
     (send-email! mailer (:args job))
-    (drip/complete-job client (:id job))))
+    (drip/complete-job client job)))
 
 {"send_email" (email-worker mailer-instance)}
 ```
@@ -323,7 +323,7 @@ Persist a handler's result into the job's `metadata` column under the `"output"`
                     (let [result (run-report (:args job))]
                       (drip/with-tx [tx client]
                         (drip/record-output! client tx (:id job) result)
-                        (drip/complete-job!  client tx (:id job)))))}
+                        (drip/complete-job!  client tx job))))}
 
 ;; Retrieve later
 (get-in (drip/get-job client job-id) [:metadata "output"])
@@ -459,8 +459,8 @@ One job per period window — duplicate insertions are silently discarded.
 (drip/cancel-job   client job-id)
 (drip/retry-job    client job-id)    ; force back to :available
 (drip/discard-job  client job-id)
-(drip/snooze-job   client job-id "30m")  ; reschedule without consuming retry budget
-(drip/complete-job client job-id)
+(drip/snooze-job   client job "30m")  ; reschedule without consuming retry budget
+(drip/complete-job client job)
 (drip/record-output client job-id {:result 42})
 
 ;; Explicit tx variants
@@ -468,8 +468,8 @@ One job per period window — duplicate insertions are silently discarded.
 (drip/cancel-job!    client tx job-id)
 (drip/retry-job!     client tx job-id)
 (drip/discard-job!   client tx job-id)
-(drip/snooze-job!    client tx job-id "30m")
-(drip/complete-job!  client tx job-id)
+(drip/snooze-job!    client tx job "30m")
+(drip/complete-job!  client tx job)
 (drip/record-output! client tx job-id {:result 42})
 
 ;; Update job fields

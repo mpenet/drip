@@ -418,7 +418,13 @@ Handlers own their own job state. Call `complete-job!`, `snooze-job!`, etc. dire
 {"process_order" (fn [client job]
                    (drip/with-tx [tx client]
                      (update-inventory! tx (:args job))
-                     (drip/complete-job! client tx (:id job))))}
+                     (drip/complete-job! client tx job)))}
 ```
 
 If the handler throws, the error is recorded and the job retried normally regardless of whether `complete-job!` was called.
+
+### Claims
+
+Every fetch is a new *claim* on the job. `complete-job!`, `snooze-job!` and the worker's failure recording take the job map the handler received, and only act while the job is still running under that claim. A job can move on without the handler knowing: its timeout fired, a maintenance worker rescued it, or another worker re-claimed it. A late `complete-job!` then throws `clojure.lang.ExceptionInfo` with `:type :s-exp.drip/claim-lost` and changes nothing. Inside `with-tx` the exception rolls back the handler's own writes too, so a stale handler can't commit side effects for an attempt that is no longer its own.
+
+The claim number is `(s-exp.drip.job/claim job)`, the length of `:attempted-by`. It grows on every fetch and nothing decreases it, snooze included.

@@ -2,6 +2,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.tools.logging :as log]
+            [clojure.tools.logging.test :as log-test]
             [next.jdbc :as jdbc]
             [s-exp.drip :as drip]
             [s-exp.drip-test.fixture :refer [*client* with-db]]
@@ -23,7 +24,7 @@
     (let [results (atom [])
           registry {"work_item" (fn [client job]
                                   (swap! results conj (:args job))
-                                  (drip/complete-job client (:id job)))}
+                                  (drip/complete-job client job))}
           executor (worker/start-worker!
                     {:client *client*
                      :registry registry
@@ -84,7 +85,7 @@
           registry {"conc_work" (fn [client job]
                                   (when (= total (swap! n-done inc))
                                     (deliver done true))
-                                  (drip/complete-job client (:id job)))}
+                                  (drip/complete-job client job))}
           executor (worker/start-worker!
                     {:client *client*
                      :registry registry
@@ -98,6 +99,16 @@
           (is (= total (count jobs))))
         (finally
           (try (worker/stop-worker! executor :timeout "1s") (catch Exception _ nil)))))))
+
+(defn- logged-errors
+  "Calls f with every log entry captured, whatever logging backend is on the
+   classpath. The factory is installed at the root so worker threads see it.
+   Returns the messages logged at :error."
+  [f]
+  (let [entries (log-test/atomic-log log-test/->LogEntry)]
+    (with-redefs [log/*logger-factory* (log-test/logger-factory entries (constantly true))]
+      (f))
+    (keep #(when (= :error (:level %)) (:message %)) (log-test/entries entries))))
 
 (defn- flaky-client
   "Returns a copy of client whose datasource throws while @failures is positive."
@@ -117,7 +128,7 @@
           executor (worker/start-worker!
                     {:client client
                      :registry {"after_error" (fn [client job]
-                                                (drip/complete-job client (:id job))
+                                                (drip/complete-job client job)
                                                 (deliver done true))}
                      :concurrency 2
                      :poll-interval 50})]
@@ -128,6 +139,27 @@
         (is (deref done 5000 false))
         (finally
           (worker/stop-worker! executor :timeout "5s"))))))
+
+(deftest worker-logs-errors-recording-failures
+  (testing "an error while recording a handler failure is logged, not lost"
+    (let [failures (atom 0)
+          client (flaky-client *client* failures)
+          errors (logged-errors
+                  (fn []
+                    (let [executor (worker/start-worker!
+                                    {:client client
+                                     :registry {"fail_record_error"
+                                                (fn [_ _]
+                                                  ;; connections fail from here on, including fail-job!'s
+                                                  (reset! failures Long/MAX_VALUE)
+                                                  (throw (RuntimeException. "handler failed")))}
+                                     :poll-interval 50})]
+                      (try
+                        (drip/insert-job *client* "fail_record_error" {} nil)
+                        (Thread/sleep 500)
+                        (finally
+                          (worker/stop-worker! executor :timeout "5s"))))))]
+      (is (some #(str/includes? % "drip: error recording job failure") errors)))))
 
 (deftest worker-picks-up-pre-inserted-job
   (testing "job inserted before executor start is processed"
@@ -184,7 +216,7 @@
               :registry {"custom_exec_kind"
                          (fn [client job]
                            (drip/with-tx [tx client]
-                             (drip/complete-job! client tx (:id job)))
+                             (drip/complete-job! client tx job))
                            (deliver done true))}
               :executor custom-exec
               :poll-interval 50})]
@@ -204,7 +236,7 @@
              {:client *client*
               :registry {"bounded_exec_kind"
                          (fn [client job]
-                           (drip/complete-job client (:id job))
+                           (drip/complete-job client job)
                            (deliver done true))}
               :executor custom-exec
               :concurrency 1
@@ -234,32 +266,27 @@
           (drip/stop-periodic-jobs! scheduler))))))
 
 (deftest periodic-executor-dedup
-  (testing "duplicate insertions within period conflict"
+  (testing "duplicate insertions within period are skipped"
     (let [unique-opts {:unique-opts
                        {:by-args false
                         :by-period "1h"
                         :by-queue true
                         :by-state job/default-unique-states}}]
       (drip/insert-job *client* "dedup_test" {} (merge {:queue "default"} unique-opts))
-      (is (thrown? Exception
-                   (drip/insert-job *client* "dedup_test" {}
-                                    (merge {:queue "default"} unique-opts))))))
+      (is (:unique-skipped (drip/insert-job *client* "dedup_test" {}
+                                            (merge {:queue "default"} unique-opts))))))
   (testing "scheduler treats a duplicate within the period as a no-op, not an error"
-    (let [errors (atom [])
-          log* log/log*
-          spec {:kind "periodic_dedup" :args {} :period "1h"}]
-      (with-redefs [log/log* (fn [logger level throwable message]
-                               (when (= :error level)
-                                 (swap! errors conj message))
-                               (log* logger level throwable message))]
-        (let [s1 (drip/start-periodic-jobs! *client* [spec])
-              _ (Thread/sleep 300)
-              s2 (drip/start-periodic-jobs! *client* [spec])]
-          (Thread/sleep 300)
-          (drip/stop-periodic-jobs! s1)
-          (drip/stop-periodic-jobs! s2)))
+    (let [spec {:kind "periodic_dedup" :args {} :period "1h"}
+          errors (logged-errors
+                  (fn []
+                    (let [s1 (drip/start-periodic-jobs! *client* [spec])
+                          _ (Thread/sleep 300)
+                          s2 (drip/start-periodic-jobs! *client* [spec])]
+                      (Thread/sleep 300)
+                      (drip/stop-periodic-jobs! s1)
+                      (drip/stop-periodic-jobs! s2))))]
       (is (= 1 (count (drip/list-jobs *client* {:kind "periodic_dedup"}))))
-      (is (= [] @errors)))))
+      (is (empty? errors)))))
 
 (deftest rescue-stuck-jobs-retryable
   (testing "stuck running job (attempts remaining) → :retryable with error appended"
@@ -480,7 +507,7 @@
                      :registry {"explicit_complete_kind"
                                 (fn [client job]
                                   (drip/with-tx [tx client]
-                                    (drip/complete-job! client tx (:id job)))
+                                    (drip/complete-job! client tx job))
                                   (deliver done true))}
                      :poll-interval 50})]
       (try
@@ -504,7 +531,7 @@
                                   (drip/with-tx [tx client]
                                     (drip/update-job! client tx (:id job)
                                                       {:metadata {:processed true}})
-                                    (drip/complete-job! client tx (:id job)))
+                                    (drip/complete-job! client tx job))
                                   (reset! side-effect :done)
                                   (deliver done true))}
                      :poll-interval 50})]
@@ -528,7 +555,7 @@
                                   (fn [client job]
                                     (try
                                       (drip/with-tx [tx client]
-                                        (drip/complete-job! client tx (:id job))
+                                        (drip/complete-job! client tx job)
                                         (throw (ex-info "rollback!" {})))
                                       (catch Exception e
                                         (deliver done true)
@@ -554,7 +581,7 @@
                                 (fn [client job]
                                   (drip/with-tx [tx client]
                                     (drip/record-output! client tx (:id job) {:result 42})
-                                    (drip/complete-job! client tx (:id job)))
+                                    (drip/complete-job! client tx job))
                                   (deliver done true))}
                      :poll-interval 50})]
       (try
@@ -577,7 +604,7 @@
                      :registry {"ephemeral_kind"
                                 (fn [client job]
                                   (drip/with-tx [tx client]
-                                    (drip/complete-job! client tx (:id job)))
+                                    (drip/complete-job! client tx job))
                                   (deliver done true))}
                      :poll-interval 50})]
       (try
@@ -639,7 +666,7 @@
                      :registry {"hook_kind"
                                 (fn [client job]
                                   (drip/with-tx [tx client]
-                                    (drip/complete-job! client tx (:id job)))
+                                    (drip/complete-job! client tx job))
                                   (deliver done true))}
                      :poll-interval 50
                      :event-fn (fn [e] (swap! events conj e))})]
@@ -704,7 +731,7 @@
                      :registry {"hook_throw_kind"
                                 (fn [client job]
                                   (drip/with-tx [tx client]
-                                    (drip/complete-job! client tx (:id job)))
+                                    (drip/complete-job! client tx job))
                                   (deliver done true))}
                      :poll-interval 50
                      :event-fn (fn [_] (throw (RuntimeException. "metrics exploded")))})]

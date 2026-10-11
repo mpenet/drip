@@ -86,6 +86,14 @@ Each database dialect has its own `make-client` constructor. All three take a `j
 (def client (sqlite/make-client   datasource))
 ```
 
+For SQLite, use a JDBC URL that sets IMMEDIATE transactions and a busy timeout on every connection:
+
+```
+jdbc:sqlite:drip.db?journal_mode=WAL&busy_timeout=5000&transaction_mode=IMMEDIATE
+```
+
+With SQLite's default DEFERRED transactions, concurrent workers fail with `SQLITE_BUSY`. `make-client` logs a warning when the datasource isn't in IMMEDIATE mode.
+
 The client record is passed to every Drip function. It holds the datasource and dialect-specific SQL implementations.
 
 ## Running migrations

@@ -71,17 +71,25 @@
           (emit! event-fn (assoc base :type :s-exp.drip.job/complete :duration-ms duration-ms))
           (let [^Throwable t result-or-ex
                 policy (get retry-policies (:kind job) (get retry-policies :default))]
-            (db/with-tx [tx client]
-              (client/fail-job!
-               client
-               tx
-               (:id job)
-               {:error (or (.getMessage t) (str (class t)))
-                :trace (let [sw (java.io.StringWriter.)
-                             pw (java.io.PrintWriter. sw)]
-                         (.printStackTrace t pw)
-                         (.toString sw))}
-               policy))
+            (try
+              (db/with-tx [tx client]
+                (client/fail-job!
+                 client
+                 tx
+                 job
+                 {:error (or (.getMessage t) (str (class t)))
+                  :trace (let [sw (java.io.StringWriter.)
+                               pw (java.io.PrintWriter. sw)]
+                           (.printStackTrace t pw)
+                           (.toString sw))}
+                 policy))
+              (catch Exception e
+                ;; claim-lost: the job already left this claim (the handler
+                ;; finalized it before throwing, or it was rescued), so there is
+                ;; nothing to record. Anything else would be lost in the executor
+                ;; if rethrown; the job stays :running until rescued.
+                (when-not (= :s-exp.drip/claim-lost (:type (ex-data e)))
+                  (log/error e "drip: error recording job failure" {:job-id (:id job)}))))
             (emit! event-fn (assoc base
                                    :type (if (timeout-ex? t)
                                            :s-exp.drip.job/timeout
@@ -161,11 +169,14 @@
                   complete-job!, fail-job!, snooze-job!, etc. Throwing any
                   Throwable signals failure — the worker records the error and
                   schedules a retry (or discards when max attempts is reached).
+                  complete-job!/snooze-job! take the job map itself: they only
+                  act while the job is still running under this claim and
+                  throw :s-exp.drip/claim-lost otherwise.
                   Example:
                     (fn [client job]
                       (drip/with-tx [tx client]
                         (my-business-write! tx (:args job))
-                        (drip/complete-job! client tx (:id job))))
+                        (drip/complete-job! client tx job)))
 
    Optional options:
      :queues            - vector of queue names to consume (default [\"default\"])

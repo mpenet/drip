@@ -109,6 +109,15 @@
   `(jdbc/with-transaction [~tx-sym (:ds ~client) ~@jdbc-opts]
      ~@body))
 
+(defmacro with-conn
+  "Opens an autocommit connection from client, binds it to conn-sym and closes
+   it after body. For reads that need no transaction: unlike with-tx it never
+   takes a write lock up front (SQLite IMMEDIATE mode), and it keeps the
+   connection open while rows are converted (PostgreSQL arrays are read lazily)."
+  [[conn-sym client] & body]
+  `(with-open [~conn-sym (jdbc/get-connection (:ds ~client))]
+     ~@body))
+
 ;; ---------------------------------------------------------------------------
 ;; Unique key computation (shared across standard dialects)
 ;; ---------------------------------------------------------------------------
@@ -168,18 +177,55 @@
 ;; Unique conflict error
 ;; ---------------------------------------------------------------------------
 
-(def unique-conflict-sql-states #{"23505" "23000"})
-
 (defn unique-conflict-ex
   "Builds an ExceptionInfo for a unique job constraint violation.
-   cause is the originating java.sql.SQLException."
-  [kind queue unique-opts ^Throwable cause]
+   data is merged into the ex-data; cause is the originating SQLException."
+  [data ^Throwable cause]
   (ex-info "Unique job conflict"
-           {:type        :s-exp.drip/unique-conflict
-            :kind        kind
-            :queue       queue
-            :unique-opts unique-opts}
+           (assoc data :type :s-exp.drip/unique-conflict)
            cause))
+
+(defn claim-lost-ex
+  "Builds the ExceptionInfo thrown when job is no longer running under the
+   claim it was fetched with (it finished, was rescued, or was re-claimed)."
+  [job]
+  (ex-info "Job claim lost"
+           {:type :s-exp.drip/claim-lost
+            :job-id (:id job)
+            :claim (job/claim job)}))
+
+(defn insert-unique!
+  "Inserts a job via (insert!), which returns the new Job. When the insert
+   hits a unique violation, returns the job holding the slot, as returned by
+   (find-holder), instead. Results carry :unique-skipped. If the holder left
+   its covered states in the meantime, the insert is retried.
+
+   Only for MariaDB and SQLite, where a failed statement does not abort the
+   surrounding transaction."
+  [unique-violation? insert! find-holder conflict-data]
+  (loop [attempts 3]
+    (let [result (try
+                   (insert!)
+                   (catch java.sql.SQLException e
+                     (if (unique-violation? e) e (throw e))))]
+      (if-not (instance? java.sql.SQLException result)
+        (assoc result :unique-skipped false)
+        (if-let [holder (find-holder)]
+          (assoc holder :unique-skipped true)
+          (if (> attempts 1)
+            (recur (dec attempts))
+            (throw (unique-conflict-ex conflict-data result))))))))
+
+(defn rethrow-unique-conflict
+  "Calls f. When it throws a SQLException for which (unique-violation? e) is
+   true, rethrows it as a :s-exp.drip/unique-conflict ExceptionInfo with data."
+  [unique-violation? data f]
+  (try
+    (f)
+    (catch java.sql.SQLException e
+      (if (unique-violation? e)
+        (throw (unique-conflict-ex data e))
+        (throw e)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Multi-row batch insert (MariaDB / SQLite)
