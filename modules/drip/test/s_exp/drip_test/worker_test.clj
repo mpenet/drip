@@ -1,13 +1,16 @@
 (ns s-exp.drip-test.worker-test
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
+            [clojure.tools.logging :as log]
             [next.jdbc :as jdbc]
             [s-exp.drip :as drip]
             [s-exp.drip-test.fixture :refer [*client* with-db]]
             [s-exp.drip.db :as db]
             [s-exp.drip.job :as job]
             [s-exp.drip.worker :as worker])
-  (:import (java.time Instant)))
+  (:import (java.sql SQLException)
+           (java.time Instant)
+           (javax.sql DataSource)))
 
 (use-fixtures :each with-db)
 
@@ -56,18 +59,20 @@
         (finally
           (try (worker/stop-worker! executor :timeout "1s") (catch Exception _ nil)))))))
 
-(deftest worker-discards-unknown-kind
-  (testing "job with no matching worker is discarded"
-    (let [registry {}
-          executor (worker/start-worker!
+(deftest worker-retries-unknown-kind
+  (testing "job with no matching handler fails and is retried per the retry policy"
+    (let [executor (worker/start-worker!
                     {:client *client*
-                     :registry registry
+                     :registry {}
                      :poll-interval 50})]
       (try
-        (drip/insert-job *client* "unknown_kind" {} nil)
-        (Thread/sleep 500)
-        (let [jobs (drip/list-jobs *client* {:kind "unknown_kind" :state :discarded})]
-          (is (= 1 (count jobs))))
+        (let [j (drip/insert-job *client* "unknown_kind" {} nil)
+              exhausted (drip/insert-job *client* "unknown_kind" {} {:max-attempts 1})]
+          (Thread/sleep 500)
+          (let [job (drip/get-job *client* (:id j))]
+            (is (= :retryable (:state job)))
+            (is (= "unknown job kind: unknown_kind" (:error (first (:errors job))))))
+          (is (= :discarded (:state (drip/get-job *client* (:id exhausted))))))
         (finally
           (worker/stop-worker! executor :timeout "5s"))))))
 
@@ -93,6 +98,36 @@
           (is (= total (count jobs))))
         (finally
           (try (worker/stop-worker! executor :timeout "1s") (catch Exception _ nil)))))))
+
+(defn- flaky-client
+  "Returns a copy of client whose datasource throws while @failures is positive."
+  [client failures]
+  (let [^DataSource ds (:ds client)]
+    (assoc client :ds (reify DataSource
+                        (getConnection [_]
+                          (if (pos? (swap! failures dec))
+                            (throw (SQLException. "db down"))
+                            (.getConnection ds)))))))
+
+(deftest worker-recovers-after-fetch-error
+  (testing "a failing fetch releases its permits so polling resumes"
+    (let [done (promise)
+          failures (atom 0)
+          client (flaky-client *client* failures)
+          executor (worker/start-worker!
+                    {:client client
+                     :registry {"after_error" (fn [client job]
+                                                (drip/complete-job client (:id job))
+                                                (deliver done true))}
+                     :concurrency 2
+                     :poll-interval 50})]
+      (try
+        (reset! failures 5)
+        (Thread/sleep 300)
+        (drip/insert-job *client* "after_error" {} nil)
+        (is (deref done 5000 false))
+        (finally
+          (worker/stop-worker! executor :timeout "5s"))))))
 
 (deftest worker-picks-up-pre-inserted-job
   (testing "job inserted before executor start is processed"
@@ -161,6 +196,26 @@
           (worker/stop-worker! w :timeout "5s")
           (.shutdown custom-exec))))))
 
+(deftest bounded-executor-with-timeout-test
+  (testing "timed jobs run on a bounded executor no larger than :concurrency"
+    (let [done (promise)
+          custom-exec (java.util.concurrent.Executors/newFixedThreadPool 1)
+          w (worker/start-worker!
+             {:client *client*
+              :registry {"bounded_exec_kind"
+                         (fn [client job]
+                           (drip/complete-job client (:id job))
+                           (deliver done true))}
+              :executor custom-exec
+              :concurrency 1
+              :job-timeouts {:default "2s"}
+              :poll-interval 50})]
+      (try
+        (drip/insert-job *client* "bounded_exec_kind" {} nil)
+        (is (deref done 5000 false))
+        (finally
+          (worker/stop-worker! w :timeout "5s"))))))
+
 (deftest periodic-executor-test
   (testing "periodic spec inserts jobs at the given interval"
     (let [scheduler
@@ -188,7 +243,23 @@
       (drip/insert-job *client* "dedup_test" {} (merge {:queue "default"} unique-opts))
       (is (thrown? Exception
                    (drip/insert-job *client* "dedup_test" {}
-                                    (merge {:queue "default"} unique-opts)))))))
+                                    (merge {:queue "default"} unique-opts))))))
+  (testing "scheduler treats a duplicate within the period as a no-op, not an error"
+    (let [errors (atom [])
+          log* log/log*
+          spec {:kind "periodic_dedup" :args {} :period "1h"}]
+      (with-redefs [log/log* (fn [logger level throwable message]
+                               (when (= :error level)
+                                 (swap! errors conj message))
+                               (log* logger level throwable message))]
+        (let [s1 (drip/start-periodic-jobs! *client* [spec])
+              _ (Thread/sleep 300)
+              s2 (drip/start-periodic-jobs! *client* [spec])]
+          (Thread/sleep 300)
+          (drip/stop-periodic-jobs! s1)
+          (drip/stop-periodic-jobs! s2)))
+      (is (= 1 (count (drip/list-jobs *client* {:kind "periodic_dedup"}))))
+      (is (= [] @errors)))))
 
 (deftest rescue-stuck-jobs-retryable
   (testing "stuck running job (attempts remaining) → :retryable with error appended"
@@ -609,7 +680,7 @@
         (finally
           (try (worker/stop-worker! executor :timeout "1s") (catch Exception _ nil))))))
 
-  (testing "event-fn receives discard event for unknown kind"
+  (testing "event-fn receives fail event for unknown kind"
     (let [events (atom [])
           executor (worker/start-worker!
                     {:client *client*
@@ -620,7 +691,9 @@
         (drip/insert-job *client* "hook_unknown_kind" {} nil)
         (Thread/sleep 300)
         (worker/stop-worker! executor :timeout "5s")
-        (is (some #(= :s-exp.drip.job/discard (:type %)) @events))
+        (is (some #(and (= :s-exp.drip.job/fail (:type %))
+                        (= "hook_unknown_kind" (:kind %)))
+                  @events))
         (finally
           (try (worker/stop-worker! executor :timeout "1s") (catch Exception _ nil))))))
 

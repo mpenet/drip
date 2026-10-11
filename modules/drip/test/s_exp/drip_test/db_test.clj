@@ -916,6 +916,27 @@
           updated (drip/update-job *client* (:id j) {:scheduled-at past-ts})]
       (is (= :available (:state updated)))))
 
+  (testing ":state :cancelled / :discarded finalizes the job"
+    (doseq [state [:cancelled :discarded]]
+      (let [j (drip/insert-job *client* "k" {} nil)
+            updated (drip/update-job *client* (:id j) {:state state})]
+        (is (= state (:state updated)))
+        (is (some? (:finalized-at updated))))))
+
+  (testing ":state :available on a finalized job clears finalized-at"
+    (let [j (drip/insert-job *client* "k" {} nil)
+          _ (drip/cancel-job *client* (:id j))
+          updated (drip/update-job *client* (:id j) {:state :available})]
+      (is (= :available (:state updated)))
+      (is (nil? (:finalized-at updated)))))
+
+  (testing "rejects states outside :available :scheduled :cancelled :discarded"
+    (let [j (drip/insert-job *client* "k" {} nil)]
+      (doseq [state [:running :completed :retryable :pending :bogus]]
+        (is (thrown? IllegalArgumentException
+                     (drip/update-job *client* (:id j) {:state state}))))
+      (is (= :available (:state (drip/get-job *client* (:id j)))))))
+
   (testing "empty opts returns job unchanged"
     (let [j (drip/insert-job *client* "k" {} {:priority 2})
           updated (drip/update-job *client* (:id j) {})]
@@ -976,17 +997,27 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest snooze-job-test
-  (testing "rescheduled job has state :scheduled and attempt count unchanged"
+  (testing "rescheduled job has state :scheduled"
     (let [j (drip/insert-job *client* "snooze_kind" {} {:queue "snooze-q"})
           _ (drip/fetch-jobs *client* "snooze-q" "w" :limit 1)
           running (drip/get-job *client* (:id j))
           _ (is (= :running (:state running)))
-          attempt-before (:attempt running)
           snoozed (drip/with-tx [tx *client*]
                     (drip/snooze-job! *client* tx (:id j) "60s"))]
       (is (= :scheduled (:state snoozed)))
-      (is (= attempt-before (:attempt snoozed)))
       (is (.isAfter ^Instant (:scheduled-at snoozed) (Instant/now)))))
+  (testing "snoozing does not consume an attempt"
+    (let [j (drip/insert-job *client* "snooze_kind" {} {:queue "snooze-q3" :max-attempts 2})
+          [running] (drip/fetch-jobs *client* "snooze-q3" "w" :limit 1)
+          _ (drip/snooze-job *client* (:id j) 0)
+          _ (drip/with-tx [tx *client*] (drip-client/promote-scheduled-jobs! *client* tx))
+          [refetched] (drip/fetch-jobs *client* "snooze-q3" "w" :limit 1)]
+      (is (= (:attempt running) (:attempt refetched)))
+      (is (= :retryable
+             (:state (drip/with-tx [tx *client*]
+                       (drip-client/fail-job! *client* tx (:id j) {:error "boom"}
+                                              (job/immediate-retry-policy)))))
+          "the failure after a snooze is still the first attempt")))
   (testing "snooze-job (no-tx variant) works"
     (let [j (drip/insert-job *client* "snooze_kind2" {} {:queue "snooze-q2"})
           _ (drip/fetch-jobs *client* "snooze-q2" "w" :limit 1)
@@ -1059,4 +1090,31 @@
           _ (drip/insert-many-fast! *client* [["fast_sched" {:x 1} {:scheduled-at future-at}]])
           listed (drip/list-jobs *client* {:kind "fast_sched"})]
       (is (= 1 (count listed)))
-      (is (= :scheduled (:state (first listed)))))))
+      (is (= :scheduled (:state (first listed))))))
+
+  (testing "scheduled-at is stored exactly, independent of the JVM timezone"
+    (when (postgres?)
+      (let [default-tz (java.util.TimeZone/getDefault)
+            ;; 01:30 local happens twice in New York on this date (DST ends)
+            edt (Instant/parse "2030-11-03T05:30:00Z")
+            est (Instant/parse "2030-11-03T06:30:00Z")]
+        (try
+          (java.util.TimeZone/setDefault (java.util.TimeZone/getTimeZone "America/New_York"))
+          (drip/insert-many-fast! *client* [["fast_tz" {:i 0} {:scheduled-at edt}]
+                                            ["fast_tz" {:i 1} {:scheduled-at est}]])
+          (finally
+            (java.util.TimeZone/setDefault default-tz)))
+        (is (= #{edt est}
+               (set (map :scheduled-at (drip/list-jobs *client* {:kind "fast_tz"}))))))))
+
+  (testing "large batches exceeding driver placeholder limits"
+    (let [n 40000
+          job-specs (mapv (fn [i] ["fast_large" {:i i} nil]) (range n))]
+      (is (= n (drip/insert-many-fast! *client* job-specs)))
+      (is (= n (count (drip/list-jobs *client* {:kind "fast_large" :limit (inc n)}))))))
+
+  (testing "keeps per-job :timeout and :ttl"
+    (drip/insert-many-fast! *client* [["fast_opts" {} {:timeout "5s" :ttl "1h"}]])
+    (let [job (first (drip/list-jobs *client* {:kind "fast_opts"}))]
+      (is (= 5000 (:timeout job)))
+      (is (= 3600000 (:ttl job))))))

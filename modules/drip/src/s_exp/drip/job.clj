@@ -20,6 +20,20 @@
 
 (def states (set (keys state->bit)))
 
+(def finalized-states #{:cancelled :completed :discarded})
+
+(def updatable-states
+  "States a job can be moved to with update-job!."
+  #{:available :scheduled :cancelled :discarded})
+
+(defn validate-update-state
+  "Returns state when it is in updatable-states, throws IllegalArgumentException otherwise."
+  [state]
+  (when-not (updatable-states state)
+    (throw (IllegalArgumentException.
+            (str "Cannot update job to state " state ", allowed: " updatable-states))))
+  state)
+
 (defn states->bitmask
   "Converts a collection of state keywords to an integer bitmask."
   ^long [state-coll]
@@ -46,6 +60,12 @@
 ;; Default unique states: all active states (not finalized)
 (def default-unique-states
   #{:available :pending :running :scheduled :retryable :completed})
+
+(defn duration-ms
+  "Converts a duration (ms number or duration string) to a long of milliseconds.
+   Returns nil for nil."
+  [d]
+  (when d (long (duration/duration d))))
 
 (def default-insert-opts
   {:max-attempts 25

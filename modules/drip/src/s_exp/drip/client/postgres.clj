@@ -130,6 +130,8 @@
 ;;   - rows newline-terminated (\n)
 ;;   - NULL represented as \N
 ;;   - literal tab/newline/backslash in values must be escaped: \t \n \\
+;;   - timestamps written as ISO-8601 instants (with Z) so they do not depend
+;;     on the JVM or session timezone
 ;; ---------------------------------------------------------------------------
 
 (defn- copy-escape ^String [^String s]
@@ -140,6 +142,9 @@
         (.replace "\n" "\\n")
         (.replace "\r" "\\r"))))
 
+(defn- copy-nullable [v]
+  (if (some? v) (str v) "\\N"))
+
 (defn- append-copy-row [^StringBuilder sb kind args opts ^Instant now]
   (let [opts (merge job/default-insert-opts opts)
         queue (:queue opts)
@@ -149,7 +154,7 @@
       (.append initial-state) (.append \tab)
       (.append "0") (.append \tab)
       (.append (int (:max-attempts opts))) (.append \tab)
-      (.append (str (encode-ts scheduled-at))) (.append \tab)
+      (.append (str scheduled-at)) (.append \tab)
       (.append (int (:priority opts))) (.append \tab)
       (.append (copy-escape (db/->json-str args))) (.append \tab)
       (.append "{}") (.append \tab) ; attempted_by (text[])
@@ -157,7 +162,9 @@
       (.append (copy-escape kind)) (.append \tab)
       (.append (copy-escape (db/->json-str (:metadata opts)))) (.append \tab)
       (.append (copy-escape queue)) (.append \tab)
-      (.append "{}") ; tags (text[])
+      (.append "{}") (.append \tab) ; tags (text[])
+      (.append (copy-nullable (job/duration-ms (:timeout opts)))) (.append \tab)
+      (.append (copy-nullable (job/duration-ms (:ttl opts))))
       (.append \newline))))
 
 ;; ---------------------------------------------------------------------------
@@ -201,8 +208,8 @@
           scheduled-at (or (:scheduled-at opts) now)
           initial-state (if (.isAfter ^Instant scheduled-at now) "scheduled" "available")
           tags-arr ^"[Ljava.lang.String;" (into-array String (map str (:tags opts)))
-          timeout-ms (when-let [t (:timeout opts)] (long (duration/duration t)))
-          ttl-ms (when-let [t (:ttl opts)] (long (duration/duration t)))
+          timeout-ms (job/duration-ms (:timeout opts))
+          ttl-ms (job/duration-ms (:ttl opts))
           result (try
                    (jdbc/execute-one!
                     tx
@@ -372,6 +379,7 @@
                   ["UPDATE drip_job
                      SET state = 'scheduled'::drip_job_state,
                          scheduled_at = ?,
+                         attempt = attempt - 1,
                          finalized_at = NULL
                      WHERE id = ? AND state = 'running'::drip_job_state
                      RETURNING *"
@@ -382,6 +390,11 @@
   (update-job! [_ tx job-id opts]
     (let [now (Instant/now)
           {:keys [metadata priority queue scheduled-at state max-attempts tags ephemeral]} opts
+          new-state (cond
+                      (contains? opts :scheduled-at) (if (and scheduled-at (.isAfter ^Instant scheduled-at now))
+                                                       :scheduled
+                                                       :available)
+                      (contains? opts :state) (job/validate-update-state state))
           sets (cond-> []
                  (contains? opts :metadata) (conj ["metadata = ?::jsonb" (db/->json-str metadata)])
                  (contains? opts :priority) (conj ["priority = ?" (int priority)])
@@ -390,13 +403,9 @@
                  (contains? opts :ephemeral) (conj ["ephemeral = ?" (boolean ephemeral)])
                  (contains? opts :tags) (conj ["tags = ?"
                                                ^"[Ljava.lang.String;" (into-array String (map str tags))])
-                 (contains? opts :scheduled-at) (conj ["scheduled_at = ?" (encode-ts scheduled-at)]
-                                                      ["state = ?::drip_job_state"
-                                                       (if (and scheduled-at (.isAfter ^Instant scheduled-at now))
-                                                         "scheduled"
-                                                         "available")])
-                 (and (contains? opts :state) (not (contains? opts :scheduled-at)))
-                 (conj ["state = ?::drip_job_state" (name state)]))]
+                 (contains? opts :scheduled-at) (conj ["scheduled_at = ?" (encode-ts scheduled-at)])
+                 new-state (conj ["state = ?::drip_job_state" (name new-state)]
+                                 ["finalized_at = ?" (when (job/finalized-states new-state) (encode-ts now))]))]
       (when (seq sets)
         (let [sql (str "UPDATE drip_job SET "
                        (str/join ", " (map first sets))
@@ -588,7 +597,7 @@
           in (ByteArrayInputStream. data)]
       (with-open [conn (.getConnection ^javax.sql.DataSource ds)]
         (long (.copyIn ^CopyManager (.getCopyAPI (pg-conn conn))
-                       "COPY drip_job (state, attempt, max_attempts, scheduled_at, priority, args, attempted_by, errors, kind, metadata, queue, tags) FROM STDIN"
+                       "COPY drip_job (state, attempt, max_attempts, scheduled_at, priority, args, attempted_by, errors, kind, metadata, queue, tags, timeout_ms, ttl_ms) FROM STDIN"
                        in)))))
 
   client/Maintenance

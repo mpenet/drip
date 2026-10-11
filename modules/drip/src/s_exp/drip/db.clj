@@ -1,9 +1,11 @@
 (ns s-exp.drip.db
-  (:require [jsonista.core :as json]
+  (:require [clojure.string :as str]
+            [jsonista.core :as json]
             [migratus.core :as migratus]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [s-exp.drip.client :as client]
+            [s-exp.drip.job :as job]
             [s-exp.duration :as duration])
   (:import (com.fasterxml.jackson.databind MapperFeature ObjectMapper SerializationFeature)
            (java.math BigInteger)
@@ -118,8 +120,22 @@
 (defn- period-floor-ms ^long [^long epoch-ms ^long period-ms]
   (* (quot epoch-ms period-ms) period-ms))
 
+(defn- canonicalize
+  "Returns v with every map, at any depth, turned into a sorted map with
+   string keys (encoded as the JSON mapper encodes them), so equal args always
+   serialize to identical bytes."
+  [v]
+  (cond
+    (map? v) (into (sorted-map)
+                   (map (fn [[k x]]
+                          [(if (instance? clojure.lang.Named k) (name k) (str k))
+                           (canonicalize x)]))
+                   v)
+    (sequential? v) (mapv canonicalize v)
+    :else v))
+
 (defn- args->hex ^String [args]
-  (.toString (BigInteger. 1 (->json (into (sorted-map) args))) 16))
+  (.toString (BigInteger. 1 (->json (canonicalize args))) 16))
 
 (defn compute-unique-key
   "Computes a 32-byte SHA-256 unique key for a job.
@@ -164,6 +180,51 @@
             :queue       queue
             :unique-opts unique-opts}
            cause))
+
+;; ---------------------------------------------------------------------------
+;; Multi-row batch insert (MariaDB / SQLite)
+;; ---------------------------------------------------------------------------
+
+;; Rows per INSERT statement: keeps statements under driver placeholder
+;; limits (MariaDB server-side prepare: 65535) and SQLite's statement size cap.
+(def ^:private insert-chunk-size 1000)
+
+(def ^:private insert-many-columns
+  (str "(attempt, attempted_by, encoded_args, errors, kind, max_attempts, metadata, "
+       "priority, queue, scheduled_at, state, tags, ephemeral, timeout_ms, ttl_ms)"))
+
+(def ^:private insert-many-row
+  "(0, '[]', ?, '[]', ?, ?, ?, ?, ?, ?, ?, '[]', 0, ?, ?)")
+
+(defn- insert-many-params [encode-ts ^Instant now [kind args opts]]
+  (let [opts (merge job/default-insert-opts opts)
+        ^Instant scheduled-at (or (:scheduled-at opts) now)]
+    [(->json-str args)
+     kind
+     (int (:max-attempts opts))
+     (->json-str (:metadata opts))
+     (int (:priority opts))
+     (:queue opts)
+     (encode-ts scheduled-at)
+     (if (.isAfter scheduled-at now) "scheduled" "available")
+     (job/duration-ms (:timeout opts))
+     (job/duration-ms (:ttl opts))]))
+
+(defn insert-many-rows!
+  "Inserts job-specs ([kind args opts] tuples) with chunked multi-row INSERTs
+   in a single transaction. encode-ts converts an Instant to the dialect's
+   timestamp parameter. Returns the number of rows inserted."
+  ^long [ds encode-ts job-specs]
+  (let [now (Instant/now)]
+    (jdbc/with-transaction [tx ds]
+      (reduce (fn [^long n chunk]
+                (let [sql (str "INSERT INTO drip_job " insert-many-columns " VALUES "
+                               (str/join "," (repeat (count chunk) insert-many-row)))
+                      params (mapcat #(insert-many-params encode-ts now %) chunk)]
+                  (+ n (long (:next.jdbc/update-count
+                              (jdbc/execute-one! tx (into [sql] params)))))))
+              0
+              (partition-all insert-chunk-size job-specs)))))
 
 ;; ---------------------------------------------------------------------------
 ;; DDL / Migration

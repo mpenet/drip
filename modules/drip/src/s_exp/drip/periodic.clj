@@ -44,14 +44,10 @@
                    (try
                      (db/with-tx [tx c]
                        (client/insert-job! c tx kind args (periodic-insert-opts spec)))
-                     (catch java.sql.SQLException e
-                       ;; 23505 = PostgreSQL unique_violation
-                       ;; 23000 = MariaDB/SQLite integrity constraint (duplicate key)
-                       (let [state (.getSQLState e)]
-                         (when-not (or (= "23505" state) (= "23000" state))
-                           (log/error e "drip: periodic insert error" {:kind kind}))))
                      (catch Exception t
-                       (log/error t "drip: periodic insert error" {:kind kind}))))
+                       ;; A unique conflict means this period's job already exists
+                       (when-not (= :s-exp.drip/unique-conflict (:type (ex-data t)))
+                         (log/error t "drip: periodic insert error" {:kind kind})))))
        0
        (period-ms period)
        TimeUnit/MILLISECONDS))

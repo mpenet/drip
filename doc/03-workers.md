@@ -276,7 +276,6 @@ Pass `:event-fn` to receive a callback for every worker event. Useful for metric
 | `:s-exp.drip.job/complete` | `:duration-ms` |
 | `:s-exp.drip.job/fail` | `:duration-ms` `:error` |
 | `:s-exp.drip.job/timeout` | `:duration-ms` `:error` |
-| `:s-exp.drip.job/discard` | — |
 | `:s-exp.drip.poll/fetched` | `:count` |
 
 All job events carry `:worker-id`, `:queue`, `:kind`, `:job-id`, and `:attempt`.
@@ -409,7 +408,7 @@ Each worker maintains its own semaphore and scheduler. Any live maintenance work
 
 ## Unknown job kinds
 
-If a job is fetched whose `:kind` is not in the registry, the worker calls `discard-job!` — the job is moved to `:discarded` without consuming a retry. This handles kind renames, dead code removal, and deployment skew.
+If a job is fetched whose `:kind` is not in the registry, the worker fails it with the error `"unknown job kind: <kind>"` and emits `:s-exp.drip.job/fail`. The job is retried according to its retry policy, so during a rolling deploy a worker that knows the kind will pick it up. Once `:max-attempts` is reached the job is discarded. To drop jobs for a kind that was removed on purpose, discard them with `delete-jobs!` or `discard-job!`.
 
 ## Explicit state management
 

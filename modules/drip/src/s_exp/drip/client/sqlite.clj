@@ -72,8 +72,8 @@
                            (or (:by-state unique-opts) job/default-unique-states)))
           scheduled-at (or (:scheduled-at opts) now)
           initial-state (if (.isAfter ^Instant scheduled-at now) "scheduled" "available")
-          timeout-ms (when-let [t (:timeout opts)] (long (duration/duration t)))
-          ttl-ms (when-let [t (:ttl opts)] (long (duration/duration t)))
+          timeout-ms (job/duration-ms (:timeout opts))
+          ttl-ms (job/duration-ms (:ttl opts))
           result (try
                    (jdbc/execute-one!
                     tx
@@ -249,6 +249,7 @@
        ["UPDATE drip_job
           SET state = 'scheduled',
               scheduled_at = ?,
+              attempt = attempt - 1,
               finalized_at = NULL
           WHERE id = ? AND state = 'running'"
         wake-at job-id])
@@ -259,6 +260,11 @@
   (update-job! [_ tx job-id opts]
     (let [now (Instant/now)
           {:keys [metadata priority queue scheduled-at state max-attempts tags ephemeral]} opts
+          new-state (cond
+                      (contains? opts :scheduled-at) (if (and scheduled-at (.isAfter ^Instant scheduled-at now))
+                                                       :scheduled
+                                                       :available)
+                      (contains? opts :state) (job/validate-update-state state))
           sets (cond-> []
                  (contains? opts :metadata) (conj ["metadata = ?" (db/->json-str metadata)])
                  (contains? opts :priority) (conj ["priority = ?" (int priority)])
@@ -266,13 +272,9 @@
                  (contains? opts :max-attempts) (conj ["max_attempts = ?" (int max-attempts)])
                  (contains? opts :ephemeral) (conj ["ephemeral = ?" (if ephemeral 1 0)])
                  (contains? opts :tags) (conj ["tags = ?" (db/->json-str tags)])
-                 (contains? opts :scheduled-at) (conj ["scheduled_at = ?" (encode-ts scheduled-at)]
-                                                      ["state = ?"
-                                                       (if (and scheduled-at (.isAfter ^Instant scheduled-at now))
-                                                         "scheduled"
-                                                         "available")])
-                 (and (contains? opts :state) (not (contains? opts :scheduled-at)))
-                 (conj ["state = ?" (name state)]))]
+                 (contains? opts :scheduled-at) (conj ["scheduled_at = ?" (encode-ts scheduled-at)])
+                 new-state (conj ["state = ?" (name new-state)]
+                                 ["finalized_at = ?" (when (job/finalized-states new-state) (encode-ts now))]))]
       (when (seq sets)
         (let [sql (str "UPDATE drip_job SET "
                        (str/join ", " (map first sets))
@@ -461,32 +463,7 @@
 
   client/FastBulkInsert
   (insert-many-fast! [{:keys [ds]} job-specs]
-    (if (empty? job-specs)
-      0
-      (let [now (Instant/now)
-            placeholder "(0, '[]', ?, '[]', ?, ?, ?, ?, ?, ?, ?, '[]', 0)"
-            sql (str "INSERT INTO drip_job "
-                     "(attempt, attempted_by, encoded_args, errors, "
-                     "kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags, ephemeral) "
-                     "VALUES "
-                     (str/join "," (repeat (count job-specs) placeholder)))
-            params (into []
-                         (mapcat (fn [[kind args opts]]
-                                   (let [opts (merge job/default-insert-opts opts)
-                                         scheduled-at (or (:scheduled-at opts) now)
-                                         state (if (.isAfter ^Instant scheduled-at now) "scheduled" "available")]
-                                     [(db/->json-str args)
-                                      kind
-                                      (int (:max-attempts opts))
-                                      (db/->json-str (:metadata opts))
-                                      (int (:priority opts))
-                                      (:queue opts)
-                                      (encode-ts scheduled-at)
-                                      state]))
-                                 job-specs))]
-        (with-open [conn (.getConnection ^javax.sql.DataSource ds)]
-          (long (:next.jdbc/update-count
-                 (jdbc/execute-one! conn (into [sql] params) {})))))))
+    (db/insert-many-rows! ds encode-ts job-specs))
 
   client/Maintenance
   (reindex! [_] {}))

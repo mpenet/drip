@@ -67,6 +67,19 @@
           k2 (db/compute-unique-key "kind" {:x 2} "q" now opts)]
       (is (not (java.util.Arrays/equals ^bytes k1 ^bytes k2)))))
 
+  (testing "nested map key order does not affect the key"
+    (let [now (Instant/now)
+          opts {:by-args true}
+          k1 (db/compute-unique-key "kind" {:x {:a 1 :b [{:c 1 :d 2}]}} "q" now opts)
+          k2 (db/compute-unique-key "kind" {:x {:b [{:d 2 :c 1}] :a 1}} "q" now opts)]
+      (is (java.util.Arrays/equals ^bytes k1 ^bytes k2))))
+
+  (testing "args mixing keyword and string keys"
+    (let [opts {:by-args true}
+          k1 (db/compute-unique-key "kind" {:a 1 "b" 2} "q" (Instant/now) opts)
+          k2 (db/compute-unique-key "kind" {"b" 2 :a 1} "q" (Instant/now) opts)]
+      (is (java.util.Arrays/equals ^bytes k1 ^bytes k2))))
+
   (testing "by-period: keys in same window are equal"
     (let [opts {:by-args false :by-period 3600000 :by-queue false :by-state nil}
           now (Instant/now)

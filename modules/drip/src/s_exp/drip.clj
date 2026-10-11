@@ -127,8 +127,8 @@
   (let [jobs (with-tx [tx client]
                (mapv (fn [[kind args opts]] (client/insert-job! client tx kind args opts))
                      job-specs))]
-    (doseq [job jobs]
-      (when job (client/notify-job-available! client (:queue job))))
+    (doseq [queue (distinct (keep :queue jobs))]
+      (client/notify-job-available! client queue))
     jobs))
 
 (defn insert-many!
@@ -147,9 +147,14 @@
      - Does not support :unique-opts deduplication
      - Does not return Job records
      - :tags and :ephemeral opts are ignored
-   PostgreSQL uses COPY FROM STDIN. MariaDB and SQLite use multi-row INSERT."
+   PostgreSQL uses COPY FROM STDIN. MariaDB and SQLite use chunked multi-row
+   INSERTs within a single transaction."
   [client job-specs]
-  (client/insert-many-fast! client job-specs))
+  (let [n (client/insert-many-fast! client job-specs)]
+    (doseq [queue (distinct (map (fn [[_ _ opts]] (:queue opts (:queue job/default-insert-opts)))
+                                 job-specs))]
+      (client/notify-job-available! client queue))
+    n))
 
 (defn fetch-jobs
   "Atomically claims up to limit available jobs from queue.
